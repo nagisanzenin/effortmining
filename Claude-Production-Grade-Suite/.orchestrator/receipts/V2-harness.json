@@ -1,0 +1,64 @@
+{
+  "task_id": "V2-harness",
+  "agent": "software-engineer",
+  "phase": "BUILD",
+  "status": "complete",
+  "artifacts": [
+    "bench/effort.py",
+    "bench/README.md",
+    "tests/test_effort_v2.py",
+    "tests/fixtures-v2/R1_exact.json",
+    "tests/fixtures-v2/R2_blind.json",
+    "tests/fixtures-v2/C1_pytest.json",
+    "tests/fixtures-v2/X1_composite.json"
+  ],
+  "metrics": {
+    "loc_delta": 1129,
+    "loc_effort_py": 3547,
+    "loc_effort_py_before": 2418,
+    "loc_readme_delta": 85,
+    "loc_tests_new": 499,
+    "loc_fixtures_new": 119,
+    "subcommands": 8,
+    "new_subcommands": ["run-composite"],
+    "unit_tests": 117,
+    "unit_tests_v1": 80,
+    "new_tests": 37,
+    "tests_passing": 117,
+    "selftest_v1_exit": 0,
+    "selftest_v2_exit": 0
+  },
+  "effort": {
+    "files_read": 9,
+    "files_written": 7,
+    "tool_calls": 41,
+    "reasoning": "high"
+  },
+  "features": {
+    "1_task_loading": "load_tasks tolerates prompt as list|string; documents[] prepended as delimited blocks with estimate_tokens accounting (document_tokens on record, conditional so v1 records stay byte-identical). --suite v1|v2 flag on all subcommands; Paths suite-scoped (-v2 state files) with shared calibration.json.",
+    "2_blind_grader": "checker.type==blind-grader -> grade_blind invokes claude -p --model claude-opus-4-8 --effort medium --output-format json with a FIXED template; payload = {task_prompt, rubric, artifact} only (blind by shape); defensive first-balanced-JSON parse; parse-fail retried once then grading_error (pass=None, excluded, NOT a task fail); grading_* token/cost fields isolated from run cost. --grade-mock = deterministic hash-keyed verdicts.",
+    "3_composite_runner": "run-composite --arms calibrated,inherit_xhigh,uniform_high --reps N --parallel N --mock; per (X-task,arm,rep) runs 5 subtasks SEQUENTIALLY (unit of parallelism = the triple), tier via resolve_arm_tier (calibrated reads calibration.json class->tier, R/C fall back to high), one record/subtask (+composite_id,arm,subtask_id) to raw/results-composite.jsonl, resumable by (composite,arm,rep,subtask), graded inline with standard checkers.",
+    "4_analyze_report": "analyze --suite v2: R/C via existing per-class machinery (rules identical) + analyze_composite (per-task & pooled summed tokens/arm mean+bootstrap CI, aggregate subtask pass/arm, pre-registered verdict: calibrated wins iff tokens<both baselines with bootstrap CI excluding 0 AND agg pass non-inferior delta=5pp Newcombe). validate --suite v2 adds grader-smoke (grade fixed artifact twice, must agree; gates matrix) + long-context probe (~10k tokens at low/max). report --suite v2 -> RESULTS-v2.md (R/C curves, composite arm table+verdict, grader-reliability line, threats).",
+    "5_calibrate": "calibrate --suite v2 MERGES R-research/C-coding into shared calibration.json (same guarded_move rule; each entry stamped suite:v2; provenance.suite=v2), PRESERVING existing v1 T* classes; X-composite skipped (arms consume, never feed); a mock v2 refit does not downgrade a proven v1 table.",
+    "6_tests": "tests/test_effort_v2.py (37): suite path isolation (v1 files untouched), doc prepend+token accounting, blind-grader payload has no producer field (asserted on constructed prompt + parsed payload keys), grader parse-fail taxonomy (monkeypatched), composite resumability, arm policy mapping incl. fallback, composite analysis math on synthetic data (verdict true/false/null cases), mock e2e over fixtures-v2/. Plus a v2 selftest path (skips if tasks-v2/ empty)."
+  },
+  "contract_ambiguities_resolved": [
+    "Blind-grader payload vs scale: contract says payload is ONLY {task_prompt,rubric,artifact}, but checker carries {rubric,pass_threshold,max_score}. Resolution: pass_threshold/max_score are harness-side; the grader emits score in [0,1] (fraction of rubric) + pass bool; harness decides passed = score >= pass_threshold/max_score (falls back to the grader's pass bool if score is unparseable). Keeps the payload to exactly three keys (blindness) while honoring the threshold.",
+    "State-file namespacing: 'byte-for-byte v1 unchanged' -> v1 paths identical; v2 uses -v2-suffixed results/graded/analysis/phase0 and RESULTS-v2.md. calibration.json is SHARED (v2 extends it). document_tokens is added to a record only when > 0, so v1 results.jsonl stays byte-identical.",
+    "analyze vs calibrate ownership of calibration.json: v1 analyze writes calibration.json; for v2, analyze writes analysis-v2.json ONLY and calibrate --suite v2 owns the merge into the shared table (matches req 5, avoids clobbering T*).",
+    "X-composite in the flat matrix: run --suite v2 and analyze's per-class machinery EXCLUDE X-composite (it is run/analyzed only via run-composite); prevents an empty spurious X-composite per-class entry and a bogus calibration row.",
+    "Composite subtask parallelism: '5 subtasks SEQUENTIALLY' -> the unit of parallelism is the (X-task,arm,rep) triple; its subtasks run in order, triples run concurrently under --parallel."
+  ],
+  "run_phase_commands": {
+    "validate": "python3 bench/effort.py validate --suite v2 --model claude-opus-4-8",
+    "run": "python3 bench/effort.py run --suite v2 --scale pilot --parallel 3",
+    "run-composite": "python3 bench/effort.py run-composite --suite v2 --arms calibrated,inherit_xhigh,uniform_high --reps 3 --parallel 3",
+    "grade": "python3 bench/effort.py grade --suite v2",
+    "analyze": "python3 bench/effort.py analyze --suite v2",
+    "calibrate": "python3 bench/effort.py calibrate --suite v2",
+    "report": "python3 bench/effort.py report --suite v2",
+    "note": "run-composite's calibrated arm reads calibration.json, so run the natural order validate -> run -> grade -> analyze -> calibrate BEFORE run-composite for R/C tiers to be fitted (else calibrated falls back to high). Append --mock / --grade-mock for an offline dry-run."
+  },
+  "verification": "python3 -m unittest discover -s tests = 117/117 OK (80 v1 unchanged + 37 v2). python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0). python3 bench/effort.py --tasks-dir tests/fixtures-v2 selftest --suite v2 = v2 ALL INVARIANTS HELD (exit 0). Real (non-mock) paths simulated by monkeypatching invoke_claude: invoke_grader token accounting + first-JSON extraction, grade_blind threshold(7/10)->pass with grading cost isolated, grader parse-fail -> 2 attempts -> grading_error with summed tokens, execute_composite_subtask -> inline pytest pass + composite_id/arm/subtask_id + fidelity. git: v1 state/calibration.json unchanged; only bench/effort.py + bench/README.md modified, tests/fixtures-v2/ + tests/test_effort_v2.py added.",
+  "notes": "Did NOT run real `claude` generations (QA/run phase owns Phase 0 + matrix spend). v1 preserved byte-for-byte: 80 tests green untouched, v1 selftest green, committed calibration.json untouched, v1 records gain no fields. Shared guarded_move helper refactored out of v1 cmd_calibrate (behavior-identical) and reused by v2 to prevent drift. Built against the SCHEMA CONTRACT with own fixtures under tests/fixtures-v2/ (sibling authors the real tasks-v2/). One realism note for QA: the composite arm verdict and R/C non-inferiority use the same Newcombe interval guard as v1, which is wide at pilot n; a non-dominant composite verdict means insufficient evidence, not proven parity -- size reps accordingly."
+}

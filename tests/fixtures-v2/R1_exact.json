@@ -1,0 +1,23 @@
+{
+  "id": "R1",
+  "class": "R-research",
+  "title": "extract a stated figure from a provided report",
+  "prompt": [
+    "Using ONLY the provided document, report the total headcount figure stated for Q4.",
+    "Output only the number between <answer> and </answer> tags, nothing else."
+  ],
+  "documents": [
+    {
+      "title": "FY25 operating review",
+      "content": "The company grew steadily through the year. Hiring accelerated in the second half, and by Q4 the total headcount was 412 employees across three offices. Attrition remained low."
+    }
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": ["412"],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_guardrail": 200,
+  "timeout_s": 120
+}

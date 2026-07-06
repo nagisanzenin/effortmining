@@ -1,0 +1,24 @@
+{
+  "id": "R2",
+  "class": "R-research",
+  "title": "summarize the central claim of a provided memo (blind-graded)",
+  "prompt": [
+    "Read the provided memo and write a one-paragraph summary that states its central",
+    "claim and gives one supporting reason drawn from the text."
+  ],
+  "documents": [
+    {
+      "title": "engineering memo",
+      "content": "Per-subagent effort right-sizing is where multi-agent token spend is won or lost. Token usage explains most of the variance in performance and cost, and cheaper effort tiers often match expensive ones on easy work, so paying for maximum effort everywhere burns budget without buying quality."
+    }
+  ],
+  "answer_convention": "prose",
+  "checker": {
+    "type": "blind-grader",
+    "rubric": "States the central claim that per-subagent effort right-sizing drives multi-agent cost, AND gives at least one supporting reason from the memo (e.g. token usage dominates cost, or cheap tiers match expensive ones on easy work).",
+    "pass_threshold": 0.5,
+    "max_score": 1.0
+  },
+  "max_output_guardrail": 500,
+  "timeout_s": 180
+}
