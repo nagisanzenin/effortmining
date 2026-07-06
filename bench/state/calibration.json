@@ -1,5 +1,14 @@
 {
   "version": 1,
+  "proven": true,
+  "provenance": {
+    "mode": "real",
+    "model": "claude-opus-4-8",
+    "cli_version": "2.1.201 (Claude Code)",
+    "runs": 180,
+    "graded": 180,
+    "fitted_from": "analysis"
+  },
   "fitted_date": "2026-07-06",
   "model": "claude-opus-4-8",
   "suite_version": "pilot-12",
@@ -7,7 +16,6 @@
   "classes": {
     "T1-mechanical": {
       "recommended_tier": "low",
-      "tier": "low",
       "confidence": "low",
       "n_graded": 9,
       "fitted": true,
@@ -21,7 +29,6 @@
     },
     "T2-simple-transform": {
       "recommended_tier": "low",
-      "tier": "low",
       "confidence": "low",
       "n_graded": 9,
       "fitted": true,
@@ -35,7 +42,6 @@
     },
     "T3-moderate-reasoning": {
       "recommended_tier": "high",
-      "tier": "high",
       "confidence": "low",
       "n_graded": 9,
       "fitted": true,
@@ -49,7 +55,6 @@
     },
     "T4-hard-reasoning": {
       "recommended_tier": "low",
-      "tier": "low",
       "confidence": "low",
       "n_graded": 9,
       "fitted": true,
@@ -71,15 +76,15 @@
     "savings_pct_vs_inherit_xhigh": {
       "point": 64.72960151802657,
       "ci95": [
-        60.86962284394899,
-        67.73819087153478
+        60.830253317105694,
+        67.76310412350622
       ]
     },
     "savings_pct_vs_uniform_high": {
       "point": 20.537940862130394,
       "ci95": [
-        12.294987838606913,
-        27.7832223408718
+        12.26468599277492,
+        27.708541682833964
       ]
     },
     "quality_gain_vs_uniform_low": {
@@ -91,6 +96,10 @@
     },
     "aggregate_pass_calibrated": 1.0,
     "noninferior_agg": true,
+    "incomplete_matrix": false,
     "undominated": true
-  }
+  },
+  "warnings": [
+    "class T4-hard-reasoning fit rests on tasks flagged misclassed"
+  ]
 }

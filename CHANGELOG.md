@@ -15,7 +15,7 @@ Pilot benchmark completed; its measured numbers are folded into the shipped docs
 
 ### Changed
 
-- **README headline resolved to its `HELD` form.** The pre-registered RQ3 claim tested and held: the calibrated policy used **64.7% fewer output tokens** (bootstrap 95% CI [60.9, 67.7]) than inheritance@`xhigh` at **equal** aggregate pass (1.000 vs 1.000); 20.5% [12.3, 27.8] fewer than uniform-`high`; +8.3 pp over uniform-`low`. Pareto verdict: **un-dominated**. Full report in `bench/RESULTS.md`.
+- **README headline resolved to its `HELD` form.** The pre-registered RQ3 claim tested and held: the calibrated policy used **64.7% fewer output tokens** (bootstrap 95% CI [60.8, 67.8]) than inheritance@`xhigh` at **equal** aggregate pass (1.000 vs 1.000); 20.5% [12.3, 27.7] fewer than uniform-`high`; +8.3 pp over uniform-`low`. Pareto verdict: **un-dominated**. Full report in `bench/RESULTS.md`.
 - **README status badge** `pre-pilot scaffold` → `pilot-proven`.
 - **`miner-*` agent descriptions** now name the class each tier is calibrated for under v1 (miner-low: T1/T2, plus T4-with-caveat; miner-high: T3) and, for tiers no class currently maps to (medium/xhigh/max), when a caller should still choose them. Frontmatter `effort:`/`name:` unchanged; the five agent bodies remain byte-identical.
 - **`/effortmine` skill** — the embedded no-file fallback table now mirrors the fitted pilot v1 values (was an a-priori ladder), labeled as the fitted pilot v1 snapshot (2026-07-06).
