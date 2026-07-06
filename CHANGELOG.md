@@ -11,7 +11,7 @@ Pilot benchmark completed; its measured numbers are folded into the shipped docs
 ### Added
 
 - **Fitted calibration table (`version: 1`).** `bench/state/calibration.json` now carries the pilot's measured recommendations — T1-mechanical → `low`, T2-simple-transform → `low`, T3-moderate-reasoning → `high`, T4-hard-reasoning → `low` (T4 flagged; its pilot tasks tested too easy — see caveats) — replacing the a-priori `version: 0` ladder.
-- **Measured results in `README.md`.** New "Measured results (pilot, 2026-07-06)" section: 180/180 runs on `claude-opus-4-8` (0 API errors, 0 fidelity violations, 175 pass / 5 wrong_answer / 0 parse_fail), a per-class pass-rate table, the token-per-tier ladder (low 101 → max 696, ≈ 6.9x), and the confirmed overthinking finding.
+- **Measured results in `README.md`.** New "Measured results (pilot, 2026-07-06)" section: 180/180 runs on `claude-opus-4-8` (0 API errors, 0 fidelity violations, 175 pass / 5 wrong_answer / 0 parse_fail), a per-class pass-rate table, the token-per-tier ladder (low 101 → max 696, ≈ 6.9x), and the confirmed saturation finding at `max`.
 
 ### Changed
 
@@ -22,8 +22,9 @@ Pilot benchmark completed; its measured numbers are folded into the shipped docs
 
 ### Notes
 
-- **Pilot caveats travel with the numbers.** n = 3 reps/cell, so per-class confidence is `low` by design (wide pre-registered intervals). **T4's** `low` recommendation rests on tasks the misclassification check flagged as too easy for Opus 4.8 — not proof that hard reasoning needs no effort; harder T4 tasks are queued. **T3** is the class with the genuine quality gradient (low 6/9, high 9/9). The overthinking tail (H3) is confirmed at `max` in all four classes. Single model, one machine; re-fit per model.
-- **Version note:** this entry documents 0.2.0, but `.claude-plugin/plugin.json` still reads `0.1.0` (owned outside these docs). Bump the manifest to `0.2.0` to reconcile.
+- **Pilot caveats travel with the numbers.** n = 3 reps/cell, so per-class confidence is `low` by design (wide pre-registered intervals). **T4's** `low` recommendation rests on tasks the misclassification check flagged as too easy for Opus 4.8 — not proof that hard reasoning needs no effort; harder T4 tasks are queued. **T3** is the class with the genuine quality gradient (low 6/9, high 9/9). H3 is confirmed at `max` in all four classes as **saturation, not regression**: `max` never improved quality over `xhigh` and always cost more (no strict regressions observed). Single model, one machine; re-fit per model.
+- **Version:** `.claude-plugin/plugin.json` and the README version badge are bumped to `0.2.0` in step with this entry.
+- **Refit scope (0.2.0):** `effort.py calibrate` refits the table from graded **benchmark** receipts only. Dispatch-log telemetry is collected today (hooks + `/effortmine`), but folding it into the refit is roadmap — the live-usage closed loop is not yet shipped.
 
 [0.2.0]: https://github.com/nagisanzenin/effortmining/releases/tag/v0.2.0
 

@@ -12,7 +12,7 @@ Read this whole file before acting.
 
 ## What this does, and does NOT, do
 
-**Does:** class-level effort calibration. It maps each subtask to one of four difficulty *classes* and dispatches at the tier the calibration table recommends for that class. The shipped table is fitted from the pilot benchmark (v1, 2026-07-06), so that choice is measured and benchmark-backed; if the live table is missing, the skill falls back to an embedded snapshot of those same v1 values.
+**Does:** class-level effort calibration. It maps each subtask to one of four difficulty *classes* and dispatches at the tier the calibration table recommends for that class. The shipped table is fitted from the 2026-07-06 pilot (180 real runs on `claude-opus-4-8`, provenance stamped in `calibration.json`), so that choice is measured and benchmark-backed; if the live table is missing, the skill falls back to an embedded snapshot of those same v1 values.
 
 **Does NOT: per-prompt magic.** There is no model that reads a specific prompt and divines its exact optimal effort. The unit of calibration is the *class*, not the individual prompt. Two different T3 subtasks get the same tier. If you need a specific subtask run at a specific effort, say so and it is honored over the table.
 
@@ -64,7 +64,7 @@ Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/res
   "margin_delta": 0.10,
   "note": "Snapshot of the fitted pilot v1 table (bench/state/calibration.json). Shown here only as the no-file fallback; the installed file is authoritative and may be newer. Per-class confidence is 'low' at the pilot's n=3/cell.",
   "classes": {
-    "T1-mechanical":         {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low; overthinking tail at max"},
+    "T1-mechanical":         {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low; saturates at max (more tokens, no quality gain)"},
     "T2-simple-transform":   {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low (a-priori guess was medium; low tested non-inferior)"},
     "T3-moderate-reasoning": {"recommended_tier": "high", "confidence": "low", "n_graded": 9, "rationale": "real quality gradient: low 6/9, high 9/9 at ~157 median out-tokens"},
     "T4-hard-reasoning":     {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "caveat": "9/9 at low, BUT all three T4 pilot tasks were flagged too easy for Opus 4.8 by the misclassification check; a cautious user should prefer xhigh for genuinely hard work until the T4 suite is extended"}
@@ -72,7 +72,7 @@ Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/res
 }
 ```
 
-`max` is recommended for no class: the pilot found an overthinking tail at `max` in every class (more tokens, no pass-rate gain), so it stays reserved for work harder than the pilot suite, never a default — it is the most expensive tier and is session-only.
+`max` is recommended for no class: the pilot found saturation at `max` in every class — it never improved quality over `xhigh` and always cost more (no strict regression observed) — so it stays reserved for work harder than the pilot suite, never a default; it is the most expensive tier and is session-only.
 
 ## Phase 4 — Dispatch each subtask at its tier
 

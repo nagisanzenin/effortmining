@@ -61,7 +61,7 @@ Claude Code lets you pin a subagent's reasoning effort (`low` through `max`), an
 
 ## Measured results (pilot, 2026-07-06)
 
-The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** on `claude-opus-4-8`: 0 API errors, 0 effort-fidelity violations, 175/180 pass (5 `wrong_answer`, 0 `parse_fail`). It fit the `version: 1` calibration table the plugin now dispatches from. Full report: `bench/RESULTS.md`; methodology pre-registered in `docs/research/04-benchmark-methodology.md`.
+The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** on `claude-opus-4-8`: 0 API errors, 0 effort-fidelity violations, 175/180 pass (5 `wrong_answer`, 0 `parse_fail`). It fit the `version: 1` calibration table the plugin now dispatches from — provenance (model, suite, fitted-date, run count) stamped in `calibration.json`. Full report: `bench/RESULTS.md`; methodology pre-registered in `docs/research/04-benchmark-methodology.md`.
 
 > _Headline claim (pre-registered RQ3) — **HELD**:_ a class-calibrated effort policy uses **64.7% fewer output tokens** (bootstrap 95% CI [60.9, 67.7]) than the status-quo inheritance policy (every subagent at `xhigh`), at **equal** aggregate pass rate (1.000 vs 1.000). It also beat the model-default `uniform-high` by **20.5%** fewer tokens [12.3, 27.8], and out-scored the `uniform-low` heuristic by **+8.3 pp** aggregate pass (1.000 vs 0.917) — so it is **un-dominated** on the pre-registered Pareto test. This was a real test that could have failed; a null or negative result would have shipped as-is.
 

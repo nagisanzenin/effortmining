@@ -1,0 +1,31 @@
+{
+  "task_id": "P2-writer-addenda",
+  "agent": "technical-writer",
+  "phase": "DOCUMENT",
+  "status": "complete",
+  "parent_task": "P2-writer",
+  "base_commit": "3b5bb43",
+  "commit": "496910e",
+  "branch": "wave-p/P2-addenda",
+  "artifacts": [
+    "README.md",
+    "CHANGELOG.md",
+    "agents/miner-max.md",
+    "agents/miner-xhigh.md",
+    "skills/effortmine/SKILL.md"
+  ],
+  "metrics": {
+    "files_updated": 5,
+    "addenda_applied": "M4 saturation wording, H1 provenance label, CHANGELOG stale-version-note fix",
+    "spots_fixed": 9,
+    "spots_deferred_to_orchestrator": 1
+  },
+  "effort": {
+    "files_read": 8,
+    "files_written": 6,
+    "tool_calls": 22
+  },
+  "loops": [],
+  "verification": "Discovered mid-task that my original P2 commit (d971278) was already merged to main (b7b0da1) and my worktree cleaned up; the orchestrator then applied the same review addenda directly to main in two commits — 34cb9ab (README overthinking->saturation, architecture data-flow M2 de-scope, plugin.json+badge 0.2.0) and 3b5bb43 (effortmine Phase-5 dispatch-log M2 de-scope). Diffed current main against all addenda targets and applied ONLY the 9 spots the orchestrator had not touched: M4 in CHANGELOG(2)/miner-max/miner-xhigh/SKILL-fallback-rationale/SKILL-max-note, H1 provenance in README-results-intro/SKILL-'what this does', plus the now-false CHANGELOG version note (plugin.json is 0.2.0 already). Deliberately did NOT re-touch SKILL:103 (Phase-5) — 3b5bb43 owns an equivalent fix; avoided a duplicate/conflict. Rebuilt the branch onto the live main tip (reset --hard main) before applying, so the 5-file diff (10 ins/9 del) sits only on lines untouched by 34cb9ab/3b5bb43 and merges cleanly. Re-verified all five miner bodies byte-identical (md5 347ffa2..., description frontmatter only). Numbers unchanged (64.7% [60.9,67.7]; 20.5% [12.3,27.8]; +8.3pp; undominated).",
+  "notes": "Coordination hazard flagged to team lead: the orchestrator (nagisanzenin) is committing these addenda directly to main in real time; I completed the untouched gaps on branch wave-p/P2-addenda. Team lead should merge this branch OR apply the itemized diffs directly (both provided in my message) — whichever fits the main-direct workflow. One judgment call left for them: README:79 (the orchestrator's own line) still LEADS with 'Overthinking is real' before qualifying '— as saturation, not regression'; it is substantively M4-correct (explicitly denies regression), so I left it untouched rather than conflict on their line. If they want it harmonized to lead with 'Saturation', that is a one-line change I can make. No push."
+}

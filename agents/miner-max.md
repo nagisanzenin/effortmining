@@ -1,6 +1,6 @@
 ---
 name: miner-max
-description: "Delegate worker pinned to MAX reasoning effort, the most expensive tier and session-only. Pilot v1 (2026-07-06) calibrates no class to this tier and confirmed an overthinking tail at max in all four classes — more tokens, no pass-rate gain. Reserve it for work harder than the pilot suite where xhigh is genuinely insufficient; do not use by default. Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to MAX reasoning effort, the most expensive tier and session-only. Pilot v1 (2026-07-06) calibrates no class to this tier and found saturation at max in all four classes — it never improved quality over xhigh and only cost more (no strict regression observed). Reserve it for work harder than the pilot suite where xhigh is genuinely insufficient; do not use by default. Identical to the other miner agents except its effort frontmatter."
 effort: max
 ---
 
