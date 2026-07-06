@@ -1,0 +1,101 @@
+{
+  "id": "X1",
+  "class": "X-composite",
+  "prompt": "Triage the OrderService price-validation incident using the attached error log, the affected-orders JSON, and the postmortem. Complete the numbered subtask you are given.",
+  "documents": [
+    {
+      "title": "OrderService error log (batch B-77)",
+      "content": "2026-06-20T10:00:01Z INFO  OrderService starting batch B-77\n2026-06-20T10:00:02Z INFO  OrderService loaded 1200 orders\n2026-06-20T10:00:03Z ERROR OrderService OrderValidationError sku=X-9931 err_code=PRICE_MISSING order=O-5001\n2026-06-20T10:00:03Z WARN  OrderService slow catalog lookup 800ms\n2026-06-20T10:00:04Z ERROR OrderService OrderValidationError sku=X-8820 err_code=PRICE_MISSING order=O-5002\n2026-06-20T10:00:05Z ERROR OrderService OrderValidationError sku=X-9931 err_code=PRICE_MISSING order=O-5003\n2026-06-20T10:00:06Z INFO  OrderService batch B-77 aborted after 3 rejections\n"
+    },
+    {
+      "title": "Affected orders (events JSON)",
+      "content": "{\n  \"events\": [\n    {\n      \"order\": \"O-5001\",\n      \"user\": \"u-11\",\n      \"status\": \"failed\"\n    },\n    {\n      \"order\": \"O-5002\",\n      \"user\": \"u-22\",\n      \"status\": \"failed\"\n    },\n    {\n      \"order\": \"O-5003\",\n      \"user\": \"u-11\",\n      \"status\": \"failed\"\n    },\n    {\n      \"order\": \"O-4000\",\n      \"user\": \"u-33\",\n      \"status\": \"ok\"\n    },\n    {\n      \"order\": \"O-5004\",\n      \"user\": \"u-44\",\n      \"status\": \"failed\"\n    },\n    {\n      \"order\": \"O-5005\",\n      \"user\": \"u-22\",\n      \"status\": \"retrying\"\n    }\n  ]\n}"
+    },
+    {
+      "title": "Postmortem O-INC-88 (summary)",
+      "content": "# Postmortem O-INC-88 (summary)\nBatch B-77 aborted after a burst of orders failed price validation.\nInvestigation found that the price-catalog sync job, `catalog-sync`, had\nsilently skipped SKUs created in the preceding 60 minutes due to a cursor bug,\nso those newly-added SKUs had no price row. OrderService then rejected any order\nreferencing those SKUs with err_code=PRICE_MISSING. The downstream OrderService\nand the WarehouseService were NOT at fault; the trigger was entirely upstream in\ncatalog-sync. Fix: patch the catalog-sync cursor and backfill missing prices.\n"
+    }
+  ],
+  "checker": {
+    "type": "composite",
+    "aggregate": "mean_subtask_pass",
+    "n_subtasks": 5
+  },
+  "subtasks": [
+    {
+      "id": "X1.1",
+      "class": "mechanical",
+      "prompt": "From the OrderService error log, the ERROR lines share a constant error class and err_code. Output the signature EXACTLY as `<ErrorClass>|<err_code>` taken from the first ERROR line. Put only that between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "OrderValidationError|PRICE_MISSING"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X1.2",
+      "class": "transform",
+      "prompt": "In the events JSON, count the number of DISTINCT users whose status is exactly \"failed\". Output only that integer between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "3"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X1.3",
+      "class": "research-lite",
+      "prompt": "Per the postmortem, which single upstream job is the root cause of the incident? Output its exact name as written in the document, between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "catalog-sync"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X1.4",
+      "class": "coding",
+      "prompt": "Write a Python function `retry_delay(attempt)` giving the backoff delay in seconds for a 0-indexed attempt: delay = 2 ** attempt, but never more than a cap of 30. Examples: retry_delay(0)==1, retry_delay(1)==2, retry_delay(3)==8. Respond with a SINGLE ```python code block defining retry_delay and nothing else.",
+      "checker": {
+        "type": "pytest-asserts",
+        "answer_convention": "python-code-block",
+        "entrypoint": "retry_delay",
+        "asserts": [
+          "assert retry_delay(0) == 1",
+          "assert retry_delay(1) == 2",
+          "assert retry_delay(2) == 4",
+          "assert retry_delay(3) == 8",
+          "assert retry_delay(4) == 16",
+          "assert retry_delay(5) == 30",
+          "assert retry_delay(6) == 30",
+          "assert retry_delay(10) == 30"
+        ],
+        "timeout_s": 5
+      }
+    },
+    {
+      "id": "X1.5",
+      "class": "format",
+      "prompt": "Produce a one-line status update EXACTLY matching this template, substituting the given values (keep the literal spacing and separators):\n  [RESOLVED] <service> | sig=<signature> | users=<n> | cause=<job>\nwith service=OrderService, signature=OrderValidationError|PRICE_MISSING, n=3, job=catalog-sync. Put only the resulting line between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "[RESOLVED] OrderService | sig=OrderValidationError|PRICE_MISSING | users=3 | cause=catalog-sync"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    }
+  ],
+  "max_output_guardrail": 1200,
+  "timeout_s": 300
+}

@@ -1,0 +1,45 @@
+{
+  "task_id": "V1-suite",
+  "agent": "data-scientist",
+  "phase": "DEFINE",
+  "status": "complete",
+  "artifacts": [
+    "docs/research/05-benchmark-v2-methodology.md",
+    "bench/tools/validate_oracles_v2.py",
+    "bench/tasks-v2/R1.json",
+    "bench/tasks-v2/R2.json",
+    "bench/tasks-v2/R3.json",
+    "bench/tasks-v2/C1.json",
+    "bench/tasks-v2/C2.json",
+    "bench/tasks-v2/C3.json",
+    "bench/tasks-v2/X1.json",
+    "bench/tasks-v2/X2.json",
+    "bench/tasks-v2/X3.json"
+  ],
+  "metrics": {
+    "tasks_authored": 9,
+    "classes": 3,
+    "class_breakdown": "R-research x3 (R1 exact, R2/R3 blind-grader), C-coding x3 (all pytest-asserts), X-composite x3 (5 deterministic subtasks each)",
+    "checker_mix": "1 exact + 2 blind-grader + 3 pytest-asserts + 3 composite; X subtasks = 12 exact + 3 pytest-asserts",
+    "blind_grader_tasks": 2,
+    "research_doc_tokens": "R1 ~8160, R2 ~8250, R3 ~8195 (>= 8000 floor, len/4 estimate; real tokenization higher)",
+    "hidden_asserts": "C1 24, C2 14 (3 planted bugs), C3 11 (behaviour+isolation+introspection); X coding subtasks 8/7/5",
+    "validator_checks": 114,
+    "generation_runs_planned": 225,
+    "grader_calls_planned": 42,
+    "run_layout": "R+C 6 tasks x 5 tiers x 3 reps = 90; X 3 jobs x 3 arms x 3 reps x 5 subtasks = 135; grader 30 + H6 12",
+    "est_cost_usd_range": "recommended full v2 ~$9-14 (mid ~$11, API-equivalent, plan-metered); reduced R+C ~$5-8; extended n=5 ~$15-22",
+    "hypotheses_registered": 3,
+    "x_arms": 3,
+    "doc_lines_05": 182
+  },
+  "effort": {
+    "files_read": 9,
+    "files_written": 12,
+    "scratchpad_generators": 3,
+    "tool_calls": 96
+  },
+  "loops": [],
+  "verification": "python3 bench/tools/validate_oracles_v2.py -> 114/114 checks green, exit 0. Independently: (R1 exact) re-derived all 8 answer fields from the AUTHORITATIVE documents (changelog/migration/config-ref), confirmed each trap value (128/250/3000, 'removed 4.4') exists in a SECONDARY doc, confirmed NO secondary doc states a correct value (256/5000), and matched the shipped answer key with no drift; (R2/R3 blind-grader) parsed each rubric -> 5 point-weighted criteria summing to max_score=10, pass_threshold=7 consistent with the rubric's own 'pass iff >= 7/10', every quantitative anchor grounded in the docs; (C1/C2/C3) ran every hidden assert suite against an INDEPENDENT reference solution embedded in the validator (all pass) AND against a wrong/buggy version (all fail) -- for C2/C3 the SHIPPED broken code is extracted from the prompt and shown to fail its own asserts (3 planted bugs caught; module-global state + a cheating class both rejected); (X1/X2/X3) verified 5 class-spanning subtasks each, re-derived every exact subtask answer from the task documents, ran each coding subtask reference (pass) and buggy variant (fail); suite invariants (9 tasks, 3/class, checker mix, R has >=1 exact & <=2 blind-grader). Authoring self-tests (scratchpad gen_C/gen_R/gen_X.py) independently proved the same oracle integrity and the >=8000 doc-token floor before emit. No benchmark/generation runs executed (design-only).",
+  "notes": "v2 answers the user's verbatim requirement -- prove NO quality regression on high-value real work (deep research, real coding, composite jobs), not just cost savings. Directly targets the v1 failure mode: 11/12 v1 tasks saturated at 100% across all tiers (only T3c discriminated), so v1 could not test regression. v2 tasks are built for a real gradient (H4): R1 has 4-5 planted source-conflict traps + one rename-vs-replacement reasoning field + exact-match-on-all-8 (docs interleaved so traps are hit before the truth); R2/R3 bury the load-bearing synthesis (A-vs-B contradiction + Paper C task-dependence reconciliation; one common root cause CS-2288 across 3 differently-blamed postmortems) in 8k+ tokens with distractors; C uses hidden adversarial asserts calibrated so a happy-path low-effort solution plausibly fails the traps (half-open boundaries, tz-naive compare, mutation-during-iteration, no-module-state introspection). R docs are all invented (contamination control) and 8k-8.25k tokens each. X = 3 realistic composite jobs of 5 deterministic subtasks spanning classes (mechanical/transform/research-lite/coding/format), for the 3-arm policy test (P_calibrated per-subtask-class vs P_inherit_xhigh vs P_uniform_high) measuring summed output tokens + aggregate pass NI at delta_agg=0.05 (H5). Pre-registered: inherits ALL v1 stats machinery (04 sec 5: class pooling n=9, ceiling-referenced NI delta=10pp, Wilson/Newcombe/bootstrap); adds H4 (R/C show a real gradient -- low degrades), H5 (calibrated arm dominates both X baselines), H6 (blind-grader reproducibility >= 90% as a Phase-0 hard gate, double-grading 12 artifacts at fixed medium effort). Blind-grader protocol pre-registered and binding: agents/effort-grader.md contract, blind payload (no tier/agent/effort/model field), fixed medium effort, skeptic-first/round-down, strict JSON, verdicts FINAL (no regrade shopping). TWO cross-owner coordination seams flagged in 05 sec 8 and to the lead: (1) agents/effort-grader.md currently emits grade in {pass,partial,fail}->score in {1,0.5,0}; v2 point-weighted rubrics need the grader to emit a numeric total score in [0,max_score] (rubric text self-instructs 'score each criterion, sum to 10') for the harness to compare to pass_threshold -- a small additive output-schema extension the grader owner must confirm before R2/R3 are graded; (2) X tasks use checker.type='composite' (aggregator marker, aggregate=mean_subtask_pass, n_subtasks=5) which extends the base checker enum {exact,pytest-asserts,blind-grader} -- necessary because a 5-subtask job cannot be graded by one leaf checker; subtask checkers all use base-enum types, so the harness special-cases class=='X-composite' and iterates subtasks under the arm's per-class tier. Est $ are API-price equivalents; real runs consume the user's plan. Did NOT touch bench/effort.py or tests/ (sibling-owned). Authoring generators kept in scratchpad (not committed); the 9 JSON task files are the self-contained deliverable and validate_oracles_v2.py re-verifies them independently."
+}

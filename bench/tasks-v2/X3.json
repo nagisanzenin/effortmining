@@ -1,0 +1,98 @@
+{
+  "id": "X3",
+  "class": "X-composite",
+  "prompt": "Debug the data-pipeline run using the attached sample dataset, the error log, and the record schema. Complete the numbered subtask you are given.",
+  "documents": [
+    {
+      "title": "Sample dataset (records JSON)",
+      "content": "{\n  \"records\": [\n    {\n      \"id\": \"rec-0001\",\n      \"amount\": 120,\n      \"status\": \"ok\"\n    },\n    {\n      \"id\": \"rec-0042\",\n      \"amount\": -5,\n      \"status\": \"ok\"\n    },\n    {\n      \"id\": \"rec-0087\",\n      \"amount\": 50,\n      \"status\": \"cancelled\"\n    },\n    {\n      \"id\": \"rec-0090\",\n      \"amount\": -12,\n      \"status\": \"ok\"\n    },\n    {\n      \"id\": \"rec-0101\",\n      \"amount\": 0,\n      \"status\": \"ok\"\n    },\n    {\n      \"id\": \"rec-0110\",\n      \"amount\": 75,\n      \"status\": \"pending\"\n    }\n  ]\n}"
+    },
+    {
+      "title": "Pipeline error log (run R-9)",
+      "content": "2026-06-21T02:00:00Z INFO  pipeline start run R-9\n2026-06-21T02:00:01Z INFO  pipeline validating 6 records\n2026-06-21T02:00:02Z ERROR pipeline schema violation record_id=rec-0087 field=status value=cancelled reason=not_in_enum\n2026-06-21T02:00:02Z INFO  pipeline continuing after 1 rejection\n2026-06-21T02:00:03Z INFO  pipeline run R-9 complete\n"
+    },
+    {
+      "title": "Pipeline Record Schema (v3)",
+      "content": "# Pipeline Record Schema (version v3)\nFields and constraints:\n- id: string, format 'rec-<4 digits>'. Unchanged in v3.\n- amount: integer; MAY be negative (negative values are refunds). Unchanged in v3.\n- status: enum, allowed values = {ok, error, pending}. Unchanged in v3.\n- title: string; max length was RAISED in v3 from 80 to 120 characters.\n- notes: string; max length 500 characters. Unchanged in v3.\nChange summary for v3: the ONLY constraint that changed is the `title` field's\nmax length (80 -> 120). Every other field's constraints are identical to v2.\n"
+    }
+  ],
+  "checker": {
+    "type": "composite",
+    "aggregate": "mean_subtask_pass",
+    "n_subtasks": 5
+  },
+  "subtasks": [
+    {
+      "id": "X3.1",
+      "class": "mechanical",
+      "prompt": "From the pipeline error log, extract the record_id that failed schema validation (named on the ERROR line). Output only that id between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "rec-0087"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X3.2",
+      "class": "transform",
+      "prompt": "In the sample dataset, count the records whose `amount` is strictly NEGATIVE (amount < 0). Output only that integer between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "2"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X3.3",
+      "class": "research-lite",
+      "prompt": "Per the schema document, which single field's max-length constraint CHANGED in v3? Output only that field name between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "title"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X3.4",
+      "class": "coding",
+      "prompt": "Write a Python function `summarize_amounts(records)` where each record is a dict with an integer 'amount'. Return a dict {'count': N, 'total': sum_of_amounts, 'avg': average}. For an EMPTY list return {'count': 0, 'total': 0, 'avg': 0} (do not divide by zero). Respond with a SINGLE ```python code block defining summarize_amounts and nothing else.",
+      "checker": {
+        "type": "pytest-asserts",
+        "answer_convention": "python-code-block",
+        "entrypoint": "summarize_amounts",
+        "asserts": [
+          "assert summarize_amounts([{'amount': 10}, {'amount': 20}]) == {'count': 2, 'total': 30, 'avg': 15.0}",
+          "assert summarize_amounts([]) == {'count': 0, 'total': 0, 'avg': 0}",
+          "assert summarize_amounts([{'amount': -4}, {'amount': 4}]) == {'count': 2, 'total': 0, 'avg': 0.0}",
+          "assert summarize_amounts([{'amount': 7}])['avg'] == 7.0",
+          "assert summarize_amounts([{'amount': 7}])['count'] == 1"
+        ],
+        "timeout_s": 5
+      }
+    },
+    {
+      "id": "X3.5",
+      "class": "format",
+      "prompt": "Produce a one-line summary EXACTLY matching this template, substituting the given values (keep literal spacing and separators):\n  SUMMARY | failing_record=<id> | negatives=<n> | changed_field=<field>\nwith id=rec-0087, n=2, field=title. Put only the resulting line between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "SUMMARY | failing_record=rec-0087 | negatives=2 | changed_field=title"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    }
+  ],
+  "max_output_guardrail": 1200,
+  "timeout_s": 300
+}

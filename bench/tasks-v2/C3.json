@@ -1,0 +1,30 @@
+{
+  "id": "C3",
+  "class": "C-coding",
+  "prompt": "The module below keeps its state in module-level globals (_counts and _total).\nThat makes it impossible to run two independent accumulations in the same\nprocess. Refactor it so that ALL mutable state lives inside instances and there\nis NO module-level mutable state.\n\nRequired target interface (exact names):\n\n    class Metrics:\n        def __init__(self): ...\n        def record(self, name, value): ...   # append value under key `name`\n        def average(self, name): ...         # mean of values recorded for name,\n                                             #   or 0.0 if none\n        def grand_total(self): ...           # sum of every value ever recorded\n        def reset(self): ...                 # clear this instance's state\n\nBehaviour must be preserved exactly (same numbers the original produced for a\nsingle accumulation), and two separate Metrics() instances must be fully\nindependent: recording on one must never affect the other, and reset() on one\nmust not touch the other. There must be no module-level dict/list/set holding\naccumulated state.\n\nOriginal module:\n\n```python\n_counts = {}\n_total = 0\n\n\ndef record(name, value):\n    global _total\n    _counts.setdefault(name, []).append(value)\n    _total += value\n\n\ndef average(name):\n    vals = _counts.get(name, [])\n    return sum(vals) / len(vals) if vals else 0.0\n\n\ndef grand_total():\n    return _total\n\n\ndef reset():\n    global _total\n    _counts.clear()\n    _total = 0\n```\n\nRespond with a SINGLE Python code block (```python ... ```) defining class\nMetrics and nothing else. Include no explanation outside the code block.",
+  "checker": {
+    "type": "pytest-asserts",
+    "answer_convention": "python-code-block",
+    "entrypoint": "Metrics",
+    "asserts": [
+      "m1 = Metrics(); m2 = Metrics()",
+      "m1.record('a', 10); m1.record('a', 20); m1.record('b', 5)",
+      "m2.record('a', 100)",
+      "assert m1.average('a') == 15.0",
+      "assert m1.average('b') == 5.0",
+      "assert m1.average('z') == 0.0",
+      "assert m1.grand_total() == 35",
+      "assert m2.grand_total() == 100",
+      "assert m2.average('a') == 100.0",
+      "m1.reset()",
+      "assert m1.grand_total() == 0",
+      "assert m1.average('a') == 0.0",
+      "assert m2.grand_total() == 100",
+      "assert m2.average('a') == 100.0",
+      "assert not any(isinstance(v, (dict, list, set)) and len(v) > 0 for k, v in list(globals().items()) if not k.startswith('__') and not isinstance(v, type))"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_guardrail": 3000,
+  "timeout_s": 300
+}
