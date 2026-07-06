@@ -1,0 +1,27 @@
+{
+  "task_id": "R3-patterns",
+  "task": "R3",
+  "agent": "polymath",
+  "phase": "RESEARCH",
+  "status": "complete",
+  "artifacts": [
+    "docs/research/03-pattern-mining.md",
+    "Claude-Production-Grade-Suite/.orchestrator/receipts/R3-patterns.json"
+  ],
+  "metrics": {
+    "patterns_extracted": 15,
+    "files_analyzed": 34,
+    "repos_mined": 2,
+    "adopt_verdicts": 8,
+    "adapt_verdicts": 5,
+    "skip_verdicts": 1
+  },
+  "effort": {
+    "files_read": 24,
+    "files_written": 2,
+    "tool_calls": 36
+  },
+  "loops": [],
+  "verification": "Deliverable written and confirmed on disk (docs/research/03-pattern-mining.md); every extraction item 1-12 covered with file:line refs; frontmatter cross-check answered from primary source (Claude Code agents = name/description/tools only; Codex TOML = model_reasoning_effort). Receipt artifact paths verified to exist before writing.",
+  "notes": "HEADLINE (item 11): no reasoning-effort key on ANY Claude Code agent in either repo; only name/description/tools. The reasoning-effort dial (model_reasoning_effort: low/medium/high) exists ONLY on engram's Codex .toml ports (codex/agents/*.toml:7-9), where assessor=medium sits one tier below architect/artifact-smith=high — the author's own effort-vs-task-difficulty calibration. On Claude Code the author tiers effort BEHAVIORALLY via engagement modes + loop budgets + prompt-depth, NOT a model knob; Agent() dispatch carries no model/effort override. Crown-jewel pattern = engram-assessor blind grader (A4): blindness enforced by payload shape (input schema has no dialogue field) + separate-agent spawn with curated stash + strict-JSON consumed atomically by engram.py receipt. Calibration analog = engram.py cmd_refit (A5): guarded (min 50 receipts), clamped [0.5,1.5], receipt-fed fit of a single multiplier. Loop discipline (B2) + receipt effort field (B3) are directly reusable. Proposed repo tree synthesizes engram's deterministic-CLI+blind-assessor+guarded-fit with pg's mode-scaled orchestration+oracle-loop+receipt-telemetry. Sources cloned to scratchpad (not into project)."
+}

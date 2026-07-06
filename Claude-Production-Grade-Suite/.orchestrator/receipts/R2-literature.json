@@ -1,0 +1,23 @@
+{
+  "task_id": "R2-literature",
+  "task": "R2",
+  "agent": "data-scientist",
+  "phase": "DEFINE",
+  "status": "complete",
+  "artifacts": [
+    "docs/research/02-literature-review.md"
+  ],
+  "metrics": {
+    "citations_verified": 28,
+    "citations_rejected": 4,
+    "prior_art_found": 7
+  },
+  "effort": {
+    "files_read": 2,
+    "files_written": 2,
+    "tool_calls": 51
+  },
+  "loops": [],
+  "verification": "Every citation fetched via WebFetch (arxiv abstract page or official docs/blog) and title/authors/ID/number confirmed before inclusion; 4 unverifiable claims dropped/downgraded and logged in section 10; niche verdict cross-checked against Claude Code effort docs, Agent SDK AgentDefinition.effort, GitHub issues #43083 (open) and #37783 (closed-dup), and the two closest research prototypes (Ares 2603.07915, DART 2606.23181).",
+  "notes": "Niche VERDICT: real but narrow. Difficulty-adaptive compute is settled science (Snell 2408.03314 beats 14x-larger model; two 2025 surveys). Vendors ship STATIC effort knobs (Anthropic effort low->max, OpenAI reasoning.effort, Gemini/Qwen/DeepSeek), with model-internal auto-thinking (Gemini -1 dynamic thinking, Anthropic adaptive thinking) as the only shipped auto-calibration -- single-model, per-request, NOT per-subagent. NO shipped product does closed-loop benchmark-calibrated per-subagent effort in a harness. FRESHNESS CATCH: as of 2026-07 Anthropic effort is a 5-level control across the whole lineup and has DEPRECATED budget_tokens; docs literally recommend 'low ... like subagents' and 'dynamic effort' but ship no calibrator. NEAREST NEIGHBOR / honest baseline: Ares (arXiv 2603.07915, Mar 2026) does outcome-labeled adaptive effort selection PER STEP within one agent's loop (up to -52.7% tokens) -- we differ by being per-subagent, shipped, and black-box-knob-based. Demand proven: auto-effort is an open/duplicate feature request across Claude Code (#43083 open, #37783 closed-dup, #25669), Codex (#8649), OpenCode (#21483). Economics: Anthropic multi-agent systems ~15x chat tokens; token usage explains ~80% of perf variance -> benchmark MUST report quality at matched token budget. Benchmark prediction: difficulty x effort interaction -- flat quality/large token cut on easy tasks (Opus 4.5 medium = same SWE score at -76% tokens; TALE -68.6%; AdaptThink -53%), saturating quality gain on hard tasks with an overthinking tail at max."
+}
