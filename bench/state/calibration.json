@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "fitted_date": "2026-07-06",
+  "model": "claude-opus-4-8",
+  "suite_version": "pilot-12",
+  "margin_delta": 0.1,
+  "classes": {
+    "T1-mechanical": {
+      "recommended_tier": "low",
+      "tier": "low",
+      "confidence": "low",
+      "n_graded": 9,
+      "fitted": true,
+      "pass_rate": 1.0,
+      "ceiling_tier": "low",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 33,
+      "equivalence_low": false,
+      "overthinking": true
+    },
+    "T2-simple-transform": {
+      "recommended_tier": "low",
+      "tier": "low",
+      "confidence": "low",
+      "n_graded": 9,
+      "fitted": true,
+      "pass_rate": 1.0,
+      "ceiling_tier": "low",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 121,
+      "equivalence_low": false,
+      "overthinking": true
+    },
+    "T3-moderate-reasoning": {
+      "recommended_tier": "high",
+      "tier": "high",
+      "confidence": "low",
+      "n_graded": 9,
+      "fitted": true,
+      "pass_rate": 1.0,
+      "ceiling_tier": "high",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 157,
+      "equivalence_low": null,
+      "overthinking": true
+    },
+    "T4-hard-reasoning": {
+      "recommended_tier": "low",
+      "tier": "low",
+      "confidence": "low",
+      "n_graded": 9,
+      "fitted": true,
+      "pass_rate": 1.0,
+      "ceiling_tier": "low",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 141,
+      "equivalence_low": null,
+      "overthinking": true
+    }
+  },
+  "policy": {
+    "baselines": {
+      "inherit_xhigh": "xhigh",
+      "uniform_high": "high",
+      "uniform_low": "low"
+    },
+    "savings_pct_vs_inherit_xhigh": {
+      "point": 64.72960151802657,
+      "ci95": [
+        60.86962284394899,
+        67.73819087153478
+      ]
+    },
+    "savings_pct_vs_uniform_high": {
+      "point": 20.537940862130394,
+      "ci95": [
+        12.294987838606913,
+        27.7832223408718
+      ]
+    },
+    "quality_gain_vs_uniform_low": {
+      "point": 0.08333333333333337,
+      "ci95": [
+        0.08333333333333337,
+        0.08333333333333337
+      ]
+    },
+    "aggregate_pass_calibrated": 1.0,
+    "noninferior_agg": true,
+    "undominated": true
+  }
+}
