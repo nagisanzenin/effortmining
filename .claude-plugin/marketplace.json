@@ -1,0 +1,14 @@
+{
+  "name": "effortmining",
+  "description": "The shipped per-subagent reasoning-effort calibration layer for Claude Code.",
+  "owner": {
+    "name": "nagisanzenin"
+  },
+  "plugins": [
+    {
+      "name": "effortmining",
+      "source": "./",
+      "description": "Calibrated per-subagent reasoning effort: classify each subtask, dispatch it to the cheapest tier that still passes."
+    }
+  ]
+}
