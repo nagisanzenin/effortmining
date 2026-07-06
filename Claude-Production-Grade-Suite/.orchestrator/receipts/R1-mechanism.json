@@ -1,0 +1,33 @@
+{
+  "task_id": "R1-mechanism",
+  "agent": "polymath",
+  "phase": "DEFINE",
+  "status": "complete",
+  "artifacts": [
+    "docs/research/01-mechanism-investigation.md",
+    "Claude-Production-Grade-Suite/.orchestrator/receipts/R1-mechanism.json"
+  ],
+  "metrics": {
+    "hypotheses_tested": 4,
+    "hypotheses_verified": 4,
+    "hypotheses_partial": 1,
+    "sources_cited": 20,
+    "bundle_greps": 22,
+    "github_issues_found": 7,
+    "effort_control_surfaces": 8
+  },
+  "effort": {
+    "files_read": 5,
+    "files_written": 2,
+    "tool_calls": 36
+  },
+  "verdict": {
+    "H1": "VERIFIED",
+    "H2": "VERIFIED",
+    "H3": "VERIFIED",
+    "H4": "VERIFIED",
+    "per_subagent_effort": "CRUDE (uncalibrated) — high confidence"
+  },
+  "loops": [],
+  "verification": "Every H1-H4 claim triangulated across >=2 independent sources (native binary strings dump of CC 2.1.201, official docs.claude.com sub-agents page, CHANGELOG, live headless JSON smoke probe, live transcript JSONL, 7 GitHub issues). Confirmed: frontmatter effort key = 'effort' (Zod schema L349729 + docs L281); Agent/Task tool has model override but NO effort param (tool desc L148988 + own schema); subagents inherit session effort by default (docs L281, CHANGELOG 2.1.172); no difficulty/calibration classifier exists (auto-mode is permission-only). Deliverable + receipt exist on disk."
+}
