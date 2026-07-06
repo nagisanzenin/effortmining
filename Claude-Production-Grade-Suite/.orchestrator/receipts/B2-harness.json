@@ -13,16 +13,16 @@
     "loc": 2256,
     "loc_tests": 562,
     "subcommands": 7,
-    "unit_tests": 60,
-    "tests_passing": 60,
+    "unit_tests": 61,
+    "tests_passing": 61,
     "selftest_exit": 0,
     "oracle_validator_exit": 0,
-    "spec_revision": "R4-revised (main dd0ef19 merged)"
+    "spec_revision": "R4-revised + analyze-conformance rework"
   },
   "effort": {
-    "files_read": 22,
-    "files_written": 6,
-    "tool_calls": 55
+    "files_read": 24,
+    "files_written": 7,
+    "tool_calls": 62
   },
   "loops": [
     {
@@ -30,8 +30,14 @@
       "iterations": 3,
       "ratchet": "v1 47/47 -> spec-rev 1-fail -> 60/60 (selftest green throughout)",
       "exit": "converged"
+    },
+    {
+      "id": "b2-analyze-spec-conformance",
+      "iterations": 1,
+      "ratchet": "degenerate-classes 4 -> 0 (perfect-tie pilot: all-max -> all-low)",
+      "exit": "converged"
     }
   ],
-  "verification": "python3 -m unittest = 60/60 OK; python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0); validate_oracles.py still 34/34; Wilson (0/10,5/10,10/10) and Newcombe method-10 (56/70 vs 48/80 -> 0.0524,0.3339) match published values; sample RESULTS.md renders ceiling column, H1/H2/H3 scorecard, three-baseline Pareto headline, no emoji; .gitignore verified (calibration.json tracked; state/capture, state/dispatch-log.jsonl, raw ignored); no worktree pollution (tempdirs).",
-  "notes": "REVISED per team-lead spec update (merged main dd0ef19; B1 scaffold now present). Single-file stdlib-only harness (Python 3.14), 7 subcommands. Deltas implemented: (1) results.jsonl fields bound verbatim to the R1 envelope (effort_requested/effort_effective/effort_effective_source/fidelity_ok, input_tokens/output_tokens/total_tokens, cache_*_input_tokens, total_cost_usd, model_usage); (2) Phase 0.6 effort-fidelity gate in validate -- installs a Stop-hook capture (--settings file + sidecar), joins effective effort by session_id, aborts unless requested==effective for all 5 tiers; run now records effective effort per cell, discards+retries fidelity mismatches (bounded), excludes unverified/mismatched runs from cells; run is hard-gated on Phase 0 (--force override); (3) analyze: NI reference is the empirical quality-ceiling tier (arg-max pass, not mechanically max) so an overthinking max can't lower the bar, TOST equivalence for easy classes T1/T2 (H1, confidence high(equiv)), overthinking flag (H3), RQ3 vs THREE baselines (inherit@xhigh, uniform-high, uniform-low) with Pareto un-dominated verdict; (4) calibrate tolerates B1's dual-source dispatch-log (effortmine task_class used; posttooluse-hook agent_type-only skipped+counted) and folds graded receipts into the min-N gate. HONEST-OUTCOME NOTE for QA: at pilot n=3 the Newcombe interval guard rarely clears, so calibration tends to recommend the ceiling tier at confidence=low and token-savings vs uniform-high can be negative -- the pre-registered underpowered-pilot behavior (extend undecided classes to n=5), not a bug. Did NOT run real `claude` generations -- QA phase owns Phase 0 + pilot spend. QA commands unchanged: `validate --model claude-opus-4-8` then `run --scale pilot --parallel 3` / grade / analyze / report."
+  "verification": "python3 -m unittest = 61/61 OK; python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0); validate_oracles.py still 34/34. REWORK REPRO (team-lead's exact steps: mock pilot -> grade -> force every graded pass=True -> analyze): all 4 classes recommend 'low', degenerate(==max)=0, savings vs inherit@xhigh = +94.6% (was all-max/negative under the original max-referenced rule). Wilson/Newcombe match published values; RESULTS.md renders ceiling column + H1/H2/H3 scorecard + three-baseline Pareto, no emoji.",
+  "notes": "REVISED per team-lead spec update (merged main dd0ef19; B1 scaffold now present). Single-file stdlib-only harness (Python 3.14), 7 subcommands. Deltas implemented: (1) results.jsonl fields bound verbatim to the R1 envelope (effort_requested/effort_effective/effort_effective_source/fidelity_ok, input_tokens/output_tokens/total_tokens, cache_*_input_tokens, total_cost_usd, model_usage); (2) Phase 0.6 effort-fidelity gate in validate -- installs a Stop-hook capture (--settings file + sidecar), joins effective effort by session_id, aborts unless requested==effective for all 5 tiers; run now records effective effort per cell, discards+retries fidelity mismatches (bounded), excludes unverified/mismatched runs from cells; run is hard-gated on Phase 0 (--force override); (3) analyze: NI reference is the empirical quality-ceiling tier (arg-max pass, not mechanically max) so an overthinking max can't lower the bar, TOST equivalence for easy classes T1/T2 (H1, confidence high(equiv)), overthinking flag (H3), RQ3 vs THREE baselines (inherit@xhigh, uniform-high, uniform-low) with Pareto un-dominated verdict; (4) calibrate tolerates B1's dual-source dispatch-log (effortmine task_class used; posttooluse-hook agent_type-only skipped+counted) and folds graded receipts into the min-N gate. REWORK CLOSED (analyze spec-conformance, rework-log ec415b3): the ceiling-referenced NI rule (reference = cheapest arg-max-pass tier, tie-break TIER_INDEX; reference always a candidate) fixes the degenerate 'all-max' outcome — a perfect-tie pilot now calibrates every class to 'low' (degenerate 4->0), locked by test_perfect_tie_pilot_recommends_low_not_max. NOTE: main was already at 6c4dbfc (my wave-b/B2-specrev was merged by the environment before this rework message arrived); the fix is on main, and this receipt update + branch wave-b/B2-fix record the closed cycle. HONEST-OUTCOME NOTE for QA: at pilot n=3 with real (non-tied) data the Newcombe interval guard is still wide, so undecided classes stay confidence=low -- extend to n=5, per pre-registration. Did NOT run real `claude` generations -- QA phase owns Phase 0 + pilot spend. QA commands unchanged: `validate --model claude-opus-4-8` then `run --scale pilot --parallel 3` / grade / analyze / report."
 }
