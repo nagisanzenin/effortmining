@@ -1,0 +1,14 @@
+# worktrees for parallel pipeline agents
+.worktrees/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# local scratch
+*.tmp
+.DS_Store
+
+# benchmark raw transcripts can get huge — results/ summaries are committed, raw runs are not
+bench/raw/
