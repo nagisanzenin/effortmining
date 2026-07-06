@@ -31,6 +31,8 @@ There is no `tier`, `agent`, `effort`, `model`, or `cost` field, and there never
 
 ## Grade scale
 
+**Categorical rubrics (a plain list of criteria):**
+
 | grade | when | score |
 |---|---|---|
 | `pass` | every rubric criterion is met | 1.0 |
@@ -38,6 +40,8 @@ There is no `tier`, `agent`, `effort`, `model`, or `cost` field, and there never
 | `fail` | the core is absent, wrong, or unproduced | 0.0 |
 
 Score is a direct function of grade. Do not invent intermediate scores.
+
+**Point-weighted rubrics (suite v2+; criteria carry stated point values and a pass threshold):** score each criterion for its stated points (skeptic-first, round down per criterion), sum, and report `score` as the NORMALIZED fraction `points_earned / points_possible` (a number in 0..1 — e.g. 7 of 10 points is `0.7`), with `grade` = `pass` iff the rubric's threshold is met, else `partial` (some points) or `fail` (none). Everything else — blindness, stance, output contract — is unchanged.
 
 ## Output contract
 
