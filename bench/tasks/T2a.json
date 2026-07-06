@@ -1,0 +1,39 @@
+{
+  "id": "T2a",
+  "class": "T2-simple-transform",
+  "title": "normalize_phone — strip and reformat",
+  "prompt": [
+    "Write a Python function with this exact signature:",
+    "",
+    "    def normalize_phone(s: str) -> str:",
+    "",
+    "Behaviour:",
+    "  - Remove every character that is not a digit.",
+    "  - If fewer than 10 digits remain, return the string 'INVALID'.",
+    "  - Otherwise take the LAST 10 digits and return them formatted as '(XXX) XXX-XXXX'.",
+    "",
+    "Examples:",
+    "  normalize_phone('415-555-2671')      -> '(415) 555-2671'",
+    "  normalize_phone('+1 (415) 555 2671') -> '(415) 555-2671'",
+    "  normalize_phone('12345')             -> 'INVALID'",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining normalize_phone",
+    "and nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "normalize_phone",
+    "asserts": [
+      "assert normalize_phone('415-555-2671') == '(415) 555-2671'",
+      "assert normalize_phone('+1 (415) 555 2671') == '(415) 555-2671'",
+      "assert normalize_phone('15554443333') == '(555) 444-3333'",
+      "assert normalize_phone('555.444.3333') == '(555) 444-3333'",
+      "assert normalize_phone('12345') == 'INVALID'",
+      "assert normalize_phone('') == 'INVALID'"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "Small deterministic transform solvable with a regex or a comprehension plus slicing. Two hidden asserts (11-digit last-10 rule, empty string) reward reading the spec precisely. Expected high pass from medium up; low may slip on the last-10 or the <10 guard."
+}

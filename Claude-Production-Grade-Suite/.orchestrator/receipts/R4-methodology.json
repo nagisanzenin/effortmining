@@ -1,0 +1,41 @@
+{
+  "task_id": "R4-methodology",
+  "agent": "data-scientist",
+  "phase": "DEFINE",
+  "status": "complete",
+  "artifacts": [
+    "docs/research/04-benchmark-methodology.md",
+    "bench/tools/validate_oracles.py",
+    "bench/tasks/T1a.json",
+    "bench/tasks/T1b.json",
+    "bench/tasks/T1c.json",
+    "bench/tasks/T2a.json",
+    "bench/tasks/T2b.json",
+    "bench/tasks/T2c.json",
+    "bench/tasks/T3a.json",
+    "bench/tasks/T3b.json",
+    "bench/tasks/T3c.json",
+    "bench/tasks/T4a.json",
+    "bench/tasks/T4b.json",
+    "bench/tasks/T4c.json"
+  ],
+  "metrics": {
+    "tasks_authored": 12,
+    "difficulty_classes": 4,
+    "effort_tiers": 5,
+    "checker_mix": "6 exact + 6 pytest-asserts",
+    "blind_grader_tasks": 0,
+    "oracle_checks_passed": 34,
+    "pilot_runs_planned": 180,
+    "run_options": "reduced 90 / fallback-n2 120 / pilot-n3 180 / extended-n5 300",
+    "est_cost_usd_range": "$4.21-18.14 pilot n=3 (mid $8.22); across options $1.43-30.23 (API-equivalent, plan-metered)"
+  },
+  "effort": {
+    "files_read": 3,
+    "files_written": 18,
+    "tool_calls": 37
+  },
+  "loops": [],
+  "verification": "python3 bench/tools/validate_oracles.py -> 34/34 checks green, exit 0: recomputed every exact answer from first principles vs shipped 'expected' + prompt-drift markers, ran every pytest task's own asserts against an independent reference in a sandboxed subprocess, confirmed suite invariants (12 tasks, 3/class, 0 blind-grader, unique ids). CLI facts verified read-only in claude 2.1.201: --effort{low,medium,high,xhigh,max}, --model, --output-format json, -p present; --seed absent. Scale/cost numbers computed by bench estimate script, not fabricated results.",
+  "notes": "Design-only per instructions; no benchmark/generation runs executed. Suite = 4 classes x 3 tasks, all deterministically gradeable (0 blind grader, target met). Novel content; T3b uniqueness & T4b count brute-force-verified; every date/weekday fact in oracles checked. Recommended path: run Phase 0 gate (validate --effort accepted per tier, enumerate JSON envelope token/cost fields, confirm effort modulates output tokens monotonically >=2x low->max, prove CLAUDE_CODE_EFFORT_LEVEL unset) THEN n=3 pilot (180 runs, ~$8 API-equiv, ~2.3h sequential / ~45min @3x concurrency). Fallbacks: n=2 (120) or reduced T1+T2 (90) to shake out harness. No --seed in CLI -> run-order seeding lives in Python harness (seed 20260706); cross-run nondeterminism is the object of study (replicates). Pre-registered: NI margin delta=10pp at class level (9 trials/cell at n=3), Wilson+Newcombe CIs, bootstrap for token/savings CIs. RQ3 headline A/B (calibrated vs inheritance@xhigh vs uniform-high) is COMPUTED from the same matrix cells -- no extra runs. All est $ are API-price equivalents; real runs consume the user's subscription plan. Engineer can build bench/effort.py directly against Section 9 schemas + bench/tasks/*.json without inventing content. ABORT criteria + fallback routes (settings-file / CLAUDE_CODE_EXTRA_BODY output_config.effort) specced if Phase 0 fails. Adopted patterns cited: blind-grader (engram assessor), oracle-hierarchy (loop-protocol), receipt/effort telemetry (receipt-protocol), guarded-refit (engram FSRS)."
+}

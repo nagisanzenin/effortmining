@@ -1,0 +1,39 @@
+{
+  "id": "T2b",
+  "class": "T2-simple-transform",
+  "title": "rle — run-length encode with singleton rule",
+  "prompt": [
+    "Write a Python function with this exact signature:",
+    "",
+    "    def rle(s: str) -> str:",
+    "",
+    "It run-length-encodes the string: replace each maximal run of one repeated",
+    "character with that character followed by the run length in decimal, EXCEPT a",
+    "run of length 1, which is written as just the character (no digit).",
+    "The encoding is case-sensitive ('a' and 'A' are different characters).",
+    "The empty string encodes to the empty string.",
+    "",
+    "Examples:",
+    "  rle('aaabbc') -> 'a3b2c'",
+    "  rle('abc')    -> 'abc'",
+    "  rle('')       -> ''",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining rle and",
+    "nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "rle",
+    "asserts": [
+      "assert rle('aaabbc') == 'a3b2c'",
+      "assert rle('abc') == 'abc'",
+      "assert rle('') == ''",
+      "assert rle('aaaaaaaaaa') == 'a10'",
+      "assert rle('wwwWWW') == 'w3W3'"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "A single linear pass with two twists that hidden asserts probe: multi-digit counts ('a10', not 'aaaaaaaaaa' or 'a1...') and case sensitivity ('wwwWWW' -> 'w3W3'). The singleton-no-digit rule is the main correctness trap. Expected medium+ solid; low may emit counts for singletons."
+}

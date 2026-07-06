@@ -1,0 +1,37 @@
+{
+  "id": "T1b",
+  "class": "T1-mechanical",
+  "title": "JSON field aggregation to sorted key=value lines",
+  "prompt": [
+    "You are given a JSON object describing an order.",
+    "",
+    "JSON:",
+    "{\"order\":{\"id\":\"A-91\",\"items\":[{\"sku\":\"X1\",\"qty\":3},{\"sku\":\"X2\",\"qty\":1}],\"customer\":{\"name\":\"Ree\",\"tier\":\"gold\"}},\"ts\":\"2026-05\"}",
+    "",
+    "Compute exactly three values:",
+    "  total_qty     = the sum of all item quantities",
+    "  distinct_skus = the number of distinct sku values",
+    "  tier          = the customer's tier",
+    "",
+    "Emit exactly three lines of the form key=value:",
+    "  distinct_skus=<n>",
+    "  tier=<value>",
+    "  total_qty=<n>",
+    "sorted in ascending alphabetical order by key name (as shown above).",
+    "No other text.",
+    "",
+    "Output ONLY the three lines between <answer> and </answer> tags."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "distinct_skus=2",
+      "tier=gold",
+      "total_qty=4"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 300,
+  "difficulty_rationale": "Parse-and-aggregate over a tiny fixed JSON. One sum, one set-count, one lookup, plus a specified sort order. Marginally above T1a because of the aggregation, still fully mechanical and unambiguous."
+}

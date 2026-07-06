@@ -1,0 +1,36 @@
+{
+  "id": "T3c",
+  "class": "T3-moderate-reasoning",
+  "title": "Trace a stack-machine program",
+  "prompt": [
+    "The Python program below processes a string of opcodes with a list used as a",
+    "stack. Determine exactly what it prints.",
+    "",
+    "    def process(seq):",
+    "        stack = []",
+    "        for x in seq:",
+    "            if x == 'D' and stack:",
+    "                stack.pop()",
+    "            elif x == 'X' and stack:",
+    "                stack[-1] += 1",
+    "            else:",
+    "                stack.append(1)",
+    "        return sum(stack)",
+    "",
+    "    print(process('AADXDA'))",
+    "",
+    "Trace the execution by hand and give the printed value.",
+    "",
+    "Output ONLY the printed value between <answer> and </answer> tags."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "1"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "Careful state-tracking over six steps with three branch conditions (including the 'and stack' guards that redirect non-matching ops to append). Novel invented opcodes, so no recall shortcut. A single mis-traced pop or increment gives the wrong integer. Verified answer: 1. Expected to reward the deliberate step-by-step tracing of higher tiers."
+}

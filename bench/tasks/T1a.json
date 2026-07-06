@@ -1,0 +1,40 @@
+{
+  "id": "T1a",
+  "class": "T1-mechanical",
+  "title": "ERROR-line field extraction to pipe-delimited",
+  "prompt": [
+    "You are given server log lines. Each line has the form:",
+    "  <timestamp> <LEVEL> <service> <message>",
+    "",
+    "From every line whose level is exactly ERROR, extract three fields:",
+    "  1. the timestamp (the first whitespace-separated token),",
+    "  2. the service name (the third whitespace-separated token),",
+    "  3. the numeric value that appears as code=<number> inside the message.",
+    "",
+    "Output one line per matched ERROR entry, in the SAME order they appear in the log,",
+    "formatted exactly as:  timestamp|service|code",
+    "Do not include non-ERROR lines. Do not add headers, commentary, or trailing text.",
+    "",
+    "LOG:",
+    "2026-03-01T08:12:04Z INFO  auth-svc      user login ok uid=4471",
+    "2026-03-01T08:12:05Z ERROR billing-svc   charge failed code=5012 uid=4471",
+    "2026-03-01T08:12:06Z WARN  auth-svc      slow response code=0",
+    "2026-03-01T08:12:09Z ERROR ledger-svc    write conflict code=4090 txn=88123",
+    "2026-03-01T08:12:10Z INFO  billing-svc   retry scheduled code=0",
+    "2026-03-01T08:12:11Z ERROR billing-svc   charge failed code=5012 uid=4472",
+    "",
+    "Output ONLY the result lines between <answer> and </answer> tags, nothing else."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "2026-03-01T08:12:05Z|billing-svc|5012",
+      "2026-03-01T08:12:09Z|ledger-svc|4090",
+      "2026-03-01T08:12:11Z|billing-svc|5012"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 300,
+  "difficulty_rationale": "Pure pattern extraction with an explicit output template; no reasoning, no ambiguity. A correct low-effort read of the spec suffices. Expected near-ceiling pass at every tier; anchors the easy end of the curve."
+}
