@@ -437,6 +437,22 @@ class AnalyzeCeilingTest(unittest.TestCase):
         # all perfect -> ceiling ties -> cheapest present tier wins.
         self.assertEqual(a["per_class"][cls]["ceiling_tier"], "low")
 
+    def test_perfect_tie_pilot_recommends_low_not_max(self):
+        # Orchestrator rework oracle (rework-log.md, B2 analyze): a perfect-tie pilot
+        # (every tier at ceiling) must recommend `low` everywhere, NOT the degenerate
+        # `max` everywhere the original max-referenced rule produced. Ratchet: the
+        # number of classes recommending max must be 0.
+        classes = ["T1-mechanical", "T2-simple-transform",
+                   "T3-moderate-reasoning", "T4-hard-reasoning"]
+        tasks = {c + "-t": {"id": c + "-t", "class": c} for c in classes}
+        outs = {"low": 120, "medium": 400, "high": 1000, "xhigh": 2200, "max": 4500}
+        g = [_graded(c, t, True, outs[t])
+             for c in classes for t in e.TIERS for _ in range(9)]
+        a = e.analyze_core(tasks, g, seed=1)
+        recs = {c: a["per_class"][c]["recommended_tier"] for c in classes}
+        self.assertTrue(all(r == "low" for r in recs.values()), recs)
+        self.assertEqual(sum(1 for r in recs.values() if r == "max"), 0)
+
 
 class TOSTEquivalenceTest(unittest.TestCase):
     def test_equivalence_confirmed_at_large_n(self):
