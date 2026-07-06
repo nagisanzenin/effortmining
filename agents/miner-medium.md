@@ -1,6 +1,6 @@
 ---
 name: miner-medium
-description: "Delegate worker pinned to MEDIUM reasoning effort. Pick for a single well-specified transform with light, local reasoning and shallow edge cases (T2-simple-transform class; calibration pending pilot benchmark). Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to MEDIUM reasoning effort. Pilot v1 (2026-07-06) calibrates no class to this tier — T2-simple-transform, its a-priori home, tested non-inferior at low. Pick medium as a deliberate one-step-up hedge when a low-tier task feels borderline and you want a little more reasoning without paying for high. Identical to the other miner agents except its effort frontmatter."
 effort: medium
 ---
 

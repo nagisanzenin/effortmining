@@ -1,6 +1,6 @@
 ---
 name: miner-high
-description: "Delegate worker pinned to HIGH reasoning effort, the Opus 4.8 model default. Pick for diagnosis, multi-constraint logic, or tracing where the work is figuring out what and the answer is short (T3-moderate-reasoning class; calibration pending pilot benchmark). Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to HIGH reasoning effort, the Opus 4.8 model default. Pick for diagnosis, multi-constraint logic, or tracing where the work is figuring out what and the answer is short. Pilot v1 (2026-07-06) calibrates this tier for T3-moderate-reasoning — the class with the real quality gradient, where low fails a third of the time and high reaches full pass at ~157 median output tokens. Identical to the other miner agents except its effort frontmatter."
 effort: high
 ---
 
