@@ -497,3 +497,32 @@ class MockPipelineV2Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ArmClassMappingTest(unittest.TestCase):
+    """Regression: composite subtask informal classes must resolve to table keys
+    (the first composite pass fell back to 'high' for every subtask)."""
+
+    def test_informal_classes_resolve_to_table_tiers(self):
+        table = {"T1-mechanical": {"recommended_tier": "low"},
+                 "T2-simple-transform": {"recommended_tier": "low"},
+                 "R-research": {"recommended_tier": "low"},
+                 "C-coding": {"recommended_tier": "low"},
+                 "T3-moderate-reasoning": {"recommended_tier": "high"}}
+        for informal, want in [("mechanical", "low"), ("format", "low"),
+                               ("transform", "low"), ("research-lite", "low"),
+                               ("coding", "low"), ("moderate-reasoning", "high")]:
+            self.assertEqual(e.resolve_arm_tier("calibrated", informal, table), want,
+                             f"class {informal} must map through the alias table")
+
+    def test_every_shipped_x_subtask_class_is_mapped(self):
+        classes = set()
+        for p in glob.glob(os.path.join(os.path.dirname(e.__file__), "tasks-v2", "X*.json")):
+            with open(p) as fh:
+                for s in json.load(fh).get("subtasks", []):
+                    classes.add(s.get("class"))
+        table_keys = {"T1-mechanical", "T2-simple-transform", "T3-moderate-reasoning",
+                      "T4-hard-reasoning", "R-research", "C-coding"}
+        for c in classes:
+            canon = e.canonical_subtask_class(c)
+            self.assertIn(canon, table_keys, f"X subtask class {c!r} -> {canon!r} not a table key")

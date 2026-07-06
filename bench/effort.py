@@ -1381,20 +1381,51 @@ def load_calibration_classes(path: str) -> dict:
         return {}
 
 
+# X-task subtasks use short informal class names; the calibration table keys are
+# the canonical class ids. Normalize before lookup so the calibrated arm actually
+# reads the table (the v2 chain's first composite pass silently fell back to
+# 'high' for every subtask because of this vocabulary gap — see rework-log).
+SUBTASK_CLASS_ALIASES = {
+    "mechanical": "T1-mechanical",
+    "format": "T1-mechanical",
+    "transform": "T2-simple-transform",
+    "simple-transform": "T2-simple-transform",
+    "moderate-reasoning": "T3-moderate-reasoning",
+    "hard-reasoning": "T4-hard-reasoning",
+    "research-lite": "R-research",
+    "research": "R-research",
+    "coding": "C-coding",
+}
+
+
+def canonical_subtask_class(subtask_class: str) -> str:
+    """Map an X-subtask class (informal or canonical) to a calibration-table key."""
+    if subtask_class in SUBTASK_CLASS_ALIASES:
+        return SUBTASK_CLASS_ALIASES[subtask_class]
+    return subtask_class
+
+
 def resolve_arm_tier(arm: str, subtask_class: str, calib_classes: dict) -> str:
     """Tier a subtask runs at under its arm's policy.
 
       inherit_xhigh -> xhigh for every subtask (status-quo "just inherit" arm)
       uniform_high  -> high for every subtask (the model-default arm)
-      calibrated    -> calibration.json recommended_tier for the subtask's class,
-                       falling back to 'high' for a class not yet in the table
-                       (R-research / C-coding until `calibrate --suite v2` fits them).
+      calibrated    -> calibration.json recommended_tier for the subtask's
+                       CANONICAL class (aliases normalized), falling back to
+                       'high' for a class genuinely absent from the table —
+                       and saying so on stderr, never silently.
     """
     if arm in ARM_FIXED_TIER:
         return ARM_FIXED_TIER[arm]
     if arm == "calibrated":
-        tier = (calib_classes.get(subtask_class) or {}).get("recommended_tier")
-        return tier if tier in TIERS else COMPOSITE_FALLBACK_TIER
+        canon = canonical_subtask_class(subtask_class)
+        tier = (calib_classes.get(canon) or {}).get("recommended_tier")
+        if tier in TIERS:
+            return tier
+        print(f"[run-composite] WARNING: class {subtask_class!r} (canonical {canon!r}) "
+              f"not in calibration table; calibrated arm falls back to "
+              f"{COMPOSITE_FALLBACK_TIER!r}", file=sys.stderr)
+        return COMPOSITE_FALLBACK_TIER
     raise SystemExit(f"unknown composite arm {arm!r}; choose from {list(COMPOSITE_ARMS)}")
 
 

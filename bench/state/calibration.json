@@ -7,7 +7,8 @@
     "cli_version": "2.1.201 (Claude Code)",
     "runs": 180,
     "graded": 180,
-    "fitted_from": "analysis"
+    "fitted_from": "analysis",
+    "suite": "v2"
   },
   "fitted_date": "2026-07-06",
   "model": "claude-opus-4-8",
@@ -65,6 +66,36 @@
       "median_out_tokens": 141,
       "equivalence_low": null,
       "overthinking": true
+    },
+    "C-coding": {
+      "recommended_tier": "low",
+      "confidence": "low",
+      "n": 9,
+      "n_graded": 9,
+      "fitted": false,
+      "pass_rate": 1.0,
+      "ceiling_tier": "low",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 430,
+      "equivalence_low": null,
+      "overthinking": true,
+      "suite": "v2"
+    },
+    "R-research": {
+      "recommended_tier": "low",
+      "confidence": "low",
+      "n": 9,
+      "n_graded": 9,
+      "fitted": false,
+      "pass_rate": 1.0,
+      "ceiling_tier": "low",
+      "pass_rate_ref": 1.0,
+      "delta_vs_ref": 0.0,
+      "median_out_tokens": 689,
+      "equivalence_low": null,
+      "overthinking": true,
+      "suite": "v2"
     }
   },
   "policy": {
@@ -101,5 +132,16 @@
   },
   "warnings": [
     "class T4-hard-reasoning fit rests on tasks flagged misclassed"
-  ]
+  ],
+  "refit_v2": {
+    "suite": "v2",
+    "min_n_gate": 9,
+    "single_step": true,
+    "classes_merged": 2,
+    "classes_moved": 0,
+    "dispatch_consumed": 0,
+    "dispatch_skipped": 0,
+    "mode": "real",
+    "fitted_date": "2026-07-07"
+  }
 }
