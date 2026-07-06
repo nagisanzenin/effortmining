@@ -242,6 +242,21 @@ class GraderTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(fc, "none")
 
+    def test_pytest_forged_fixed_sentinel_rejected(self):
+        # review L1: a program that exits before our appended asserts run and prints
+        # the OLD fixed success token must NOT be graded pass — the per-run random
+        # sentinel it would have to print is unguessable. (This passed under the old
+        # fixed-constant implementation, which is the vulnerability being closed.)
+        checker = {"asserts": ["assert f(1) == 2"], "timeout_s": 5, "entrypoint": "f"}
+        raw = ("```python\n"
+               "import sys\n"
+               "def f(x):\n    return 0\n"
+               "print('__EFFORTMINING_ASSERTS_OK__')\n"
+               "sys.exit(0)\n"
+               "```")
+        ok, fc, _ = e.grade_pytest(raw, checker)
+        self.assertFalse(ok)
+
 
 class EnvSanitizationTest(unittest.TestCase):
     def test_strips_effort_override(self):
@@ -370,9 +385,14 @@ class MockPipelineTest(unittest.TestCase):
                 self.assertTrue(0.0 <= lo <= hi <= 1.0)
         # calibration is valid and covers the reduced-scale classes
         cal = e.load_json(self.paths.calibration)
-        self.assertEqual(cal["version"], 1)
+        # Mock never earns a proven table: version 0 / proven false (review H1).
+        self.assertEqual(cal["version"], 0)
+        self.assertIs(cal["proven"], False)
+        self.assertEqual(cal["provenance"]["mode"], "mock")
+        self.assertIsNone(cal["fitted_date"])
         for c in cal["classes"].values():
-            self.assertIn(c["tier"], e.TIERS)
+            self.assertIn(c["recommended_tier"], e.TIERS)
+            self.assertNotIn("tier", c)  # duplicate key removed (review L5)
         # report exists, non-empty, no emoji
         with open(self.paths.results_md, encoding="utf-8") as f:
             md = f.read()
@@ -425,8 +445,10 @@ class AnalyzeCeilingTest(unittest.TestCase):
         info = a["per_class"][cls]
         # xhigh (9/9) beats max (6/9): ceiling anchors to xhigh, not the degraded max.
         self.assertEqual(info["ceiling_tier"], "xhigh")
-        # H3: max pass <= xhigh pass AND max tokens > xhigh tokens.
-        self.assertTrue(info["overthinking"])
+        # H3 split (review M4): max (6/9) < xhigh (9/9) with more tokens -> both the
+        # pre-registered <= flag and the strict (<) regression fire.
+        self.assertTrue(info["overthinking"]["flag"])
+        self.assertTrue(info["overthinking"]["strict_regression"])
 
     def test_tie_breaks_to_cheaper_tier(self):
         cls = "T1-mechanical"
@@ -572,6 +594,200 @@ class EffortFidelityTest(unittest.TestCase):
             self.assertIsNone(e.effective_from_sidecar(sidecar, "absent"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TransientRetryTest(unittest.TestCase):
+    """review L9: transient signatures are read from stderr / a parsed error field
+    only — never from stdout, where model output can mention them as data."""
+
+    def _res(self, rc=1, stdout="", stderr="", timed_out=False):
+        return e._SandboxResult(rc, stdout, stderr, timed_out)
+
+    def test_stdout_signatures_are_ignored(self):
+        res = self._res(stdout="I hit a rate limit 429 while reasoning; the answer is 5")
+        self.assertFalse(e._is_transient_failure(res, None))
+
+    def test_stderr_rate_limit_is_transient(self):
+        res = self._res(stderr="Error: 429 rate limit exceeded, please retry")
+        self.assertTrue(e._is_transient_failure(res, None))
+
+    def test_parsed_error_field_is_transient(self):
+        env = {"is_error": True, "result": "server overloaded 529"}
+        self.assertTrue(e._is_transient_failure(self._res(rc=0), env))
+
+    def test_timeout_is_transient(self):
+        self.assertTrue(e._is_transient_failure(self._res(timed_out=True), None))
+
+    def test_nontransient_stderr_with_stdout_red_herring_not_retried(self):
+        res = self._res(stderr="HTTP 400 invalid request",
+                        stdout="my answer discusses timeout and connection handling")
+        self.assertFalse(e._is_transient_failure(res, None))
+
+
+def _graded_rep(cls, tier, passed, out, rep, tid=None, cli_version="v"):
+    r = _graded(cls, tier, passed, out, tid=tid)
+    r["rep"] = rep
+    r["cli_version"] = cli_version
+    return r
+
+
+_ALL_CLASSES = ["T1-mechanical", "T2-simple-transform",
+                "T3-moderate-reasoning", "T4-hard-reasoning"]
+_OUTS = {"low": 120, "medium": 400, "high": 1000, "xhigh": 2200, "max": 4500}
+
+
+class DeterminismTest(unittest.TestCase):
+    """review M1: analysis.json is a byte-stable function of the graded multiset,
+    independent of graded.jsonl append/line order (excluding the timestamp)."""
+
+    def _dataset(self):
+        tasks = {c + "-t": {"id": c + "-t", "class": c} for c in _ALL_CLASSES}
+        recs = []
+        for c in _ALL_CLASSES:
+            for t in e.TIERS:
+                for rep in range(3):
+                    passed = ((e.TIER_INDEX[t] + rep) % 3) != 0
+                    recs.append(_graded_rep(c, t, passed, _OUTS[t], rep, tid=c + "-t"))
+        return tasks, recs
+
+    def test_analysis_is_line_order_independent(self):
+        import random as _r
+        tasks, recs = self._dataset()
+        shuffled = list(recs)
+        _r.Random(1234).shuffle(shuffled)
+        a1 = e.analyze_core(tasks, list(recs), seed=e.SEED_DEFAULT)
+        a2 = e.analyze_core(tasks, shuffled, seed=e.SEED_DEFAULT)
+        a1["manifest"].pop("generated_at", None)
+        a2["manifest"].pop("generated_at", None)
+        self.assertEqual(json.dumps(a1, indent=2), json.dumps(a2, indent=2))
+
+
+class PolicyMatrixHonestyTest(unittest.TestCase):
+    """review M3: policy totals are computed over the task intersection; a task
+    missing any policy's cell drops out, flags incomplete_matrix, nulls undominated."""
+
+    def _tasks(self):
+        return {c + "-t": {"id": c + "-t", "class": c} for c in _ALL_CLASSES}
+
+    def _full(self):
+        return [_graded(c, t, True, _OUTS[t], tid=c + "-t")
+                for c in _ALL_CLASSES for t in e.TIERS for _ in range(9)]
+
+    def test_complete_matrix_keeps_bool_undominated(self):
+        a = e.analyze_core(self._tasks(), self._full(), seed=1)
+        pc = a["policy_comparison"]
+        self.assertFalse(pc["incomplete_matrix"])
+        self.assertEqual(pc["dropped_tasks"], [])
+        self.assertIsInstance(pc["undominated"], bool)
+
+    def test_incomplete_matrix_nulls_undominated_and_lists_dropped(self):
+        g = self._full()
+        # One hard-class task has data at 'low' only, so it cannot be compared under
+        # the xhigh/high/max policies.
+        g = [r for r in g
+             if not (r["task_id"] == "T4-hard-reasoning-t" and r["tier"] != "low")]
+        a = e.analyze_core(self._tasks(), g, seed=1)
+        pc = a["policy_comparison"]
+        self.assertTrue(pc["incomplete_matrix"])
+        self.assertIn("T4-hard-reasoning-t", pc["dropped_tasks"])
+        self.assertIsNone(pc["undominated"])
+
+    def test_report_prints_incomplete_matrix_banner(self):
+        g = self._full()
+        g = [r for r in g
+             if not (r["task_id"] == "T4-hard-reasoning-t" and r["tier"] != "low")]
+        tasks = self._tasks()
+        a = e.analyze_core(tasks, g, seed=1)
+        md = e.render_report(a, tasks)
+        self.assertIn("INCOMPLETE MATRIX", md)
+        self.assertIn("INDETERMINATE", md)
+
+
+class OverthinkingSplitTest(unittest.TestCase):
+    """review M4: overthinking surfaces {flag (<=), strict_regression (<)}."""
+
+    def _ot(self, counts):
+        cls = "T4-hard-reasoning"
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        g = [_graded(cls, tier, i < k, _OUTS[tier])
+             for tier, k in counts.items() for i in range(9)]
+        return e.analyze_core(tasks, g, seed=1)["per_class"][cls]["overthinking"]
+
+    def test_strict_regression_when_max_below_xhigh(self):
+        ot = self._ot({"low": 3, "medium": 5, "high": 8, "xhigh": 9, "max": 5})
+        self.assertTrue(ot["flag"])
+        self.assertTrue(ot["strict_regression"])
+
+    def test_saturated_when_max_equals_xhigh(self):
+        ot = self._ot({"low": 3, "medium": 5, "high": 8, "xhigh": 9, "max": 9})
+        self.assertTrue(ot["flag"])
+        self.assertFalse(ot["strict_regression"])
+
+    def test_no_flag_when_max_beats_xhigh(self):
+        ot = self._ot({"low": 3, "medium": 5, "high": 7, "xhigh": 7, "max": 9})
+        self.assertFalse(ot["flag"])
+        self.assertFalse(ot["strict_regression"])
+
+    def test_report_words_strict_vs_saturated(self):
+        cls = "T4-hard-reasoning"
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        strict = [_graded(cls, tr, i < k, _OUTS[tr])
+                  for tr, k in {"low": 3, "medium": 5, "high": 8, "xhigh": 9, "max": 5}.items()
+                  for i in range(9)]
+        md = e.render_report(e.analyze_core(tasks, strict, seed=1), tasks)
+        self.assertIn("quality regression at max", md)
+        self.assertNotIn("saturated: max buys no quality", md)
+
+
+class ProvenanceTest(unittest.TestCase):
+    """review H1: calibration provenance + mock/real version/proven + sanity guard."""
+
+    def _analysis(self, cli_version):
+        tasks = {c + "-t": {"id": c + "-t", "class": c} for c in _ALL_CLASSES}
+        g = [_graded_rep(c, t, True, _OUTS[t], rep, tid=c + "-t", cli_version=cli_version)
+             for c in _ALL_CLASSES for t in e.TIERS for rep in range(9)]
+        return e.analyze_core(tasks, g, seed=1), tasks
+
+    def test_mock_forces_unproven(self):
+        analysis, tasks = self._analysis("mock")
+        cal = e.build_calibration(analysis, tasks)
+        self.assertEqual(cal["version"], 0)
+        self.assertIs(cal["proven"], False)
+        self.assertEqual(cal["provenance"]["mode"], "mock")
+        self.assertIsNone(cal["fitted_date"])
+
+    def test_real_is_proven_with_provenance(self):
+        analysis, tasks = self._analysis("1.2.3")
+        cal = e.build_calibration(analysis, tasks, runs=180)
+        self.assertGreaterEqual(cal["version"], 1)
+        self.assertIs(cal["proven"], True)
+        prov = cal["provenance"]
+        self.assertEqual(prov["mode"], "real")
+        self.assertEqual(prov["cli_version"], "1.2.3")
+        self.assertEqual(prov["model"], "m")
+        self.assertEqual(prov["runs"], 180)
+        self.assertEqual(prov["fitted_from"], "analysis")
+
+    def test_real_perfect_ceiling_hard_low_warns(self):
+        # Every class perfect-ceiling + hard class recommending low + misclassed low
+        # tasks -> keep the fit but attach the sanity warning (sourced from misclassed).
+        analysis, tasks = self._analysis("1.2.3")
+        cal = e.build_calibration(analysis, tasks)
+        self.assertIn("warnings", cal)
+        self.assertTrue(any("T4-hard-reasoning" in w for w in cal["warnings"]))
+
+    def test_mock_never_warns(self):
+        analysis, tasks = self._analysis("mock")
+        cal = e.build_calibration(analysis, tasks)
+        self.assertNotIn("warnings", cal)
+
+    def test_calibration_class_has_no_duplicate_tier_key(self):
+        analysis, tasks = self._analysis("1.2.3")
+        cal = e.build_calibration(analysis, tasks)
+        for c in cal["classes"].values():
+            self.assertIn("recommended_tier", c)
+            self.assertNotIn("tier", c)          # review L5
+            self.assertIsInstance(c["overthinking"], bool)  # review M4 back-compat
 
 
 if __name__ == "__main__":
