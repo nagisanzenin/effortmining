@@ -17,3 +17,8 @@ Gate B — after PROVE/POLISH: results + repo review before push to private nagi
 
 # Project classification
 Greenfield — creating from scratch at ~/Documents/Github/effortmining
+
+# User decisions (binding)
+- 2026-07-06: A/B benchmark model = claude-opus-4-8 (user: "opus instead of fable"). Full effort range low|medium|high|xhigh|max supported. $5/$25 per MTok for cost math.
+- Benchmark instrument: headless `claude -p` on existing Claude Code auth (no ANTHROPIC_API_KEY, no ant CLI on this machine).
+- 2026-07-06 GATE A PASSED: research verdict + methodology approved; benchmark scale = Pilot n=3 (180 runs, 12 tasks x 5 tiers x 3 reps).
