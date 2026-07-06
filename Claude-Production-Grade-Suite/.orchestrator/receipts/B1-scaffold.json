@@ -1,0 +1,47 @@
+{
+  "task_id": "B1-scaffold",
+  "task": "B1",
+  "agent": "skill-maker",
+  "phase": "BUILD",
+  "status": "complete",
+  "artifacts": [
+    ".claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "agents/miner-low.md",
+    "agents/miner-medium.md",
+    "agents/miner-high.md",
+    "agents/miner-xhigh.md",
+    "agents/miner-max.md",
+    "agents/effort-grader.md",
+    "skills/effortmine/SKILL.md",
+    "skills/effort-bench/SKILL.md",
+    "hooks/hooks.json",
+    "hooks/session-start.sh",
+    "hooks/log-dispatch.sh",
+    "docs/architecture.md",
+    "README.md",
+    "CHANGELOG.md",
+    "Claude-Production-Grade-Suite/.orchestrator/receipts/B1-scaffold.json"
+  ],
+  "metrics": {
+    "skills": 2,
+    "agents": 6,
+    "hooks": 2,
+    "files": 16
+  },
+  "effort": {
+    "files_read": 13,
+    "files_written": 17,
+    "tool_calls": 43
+  },
+  "loops": [
+    {
+      "id": "b1-hook-verify",
+      "iterations": 2,
+      "ratchet": "log-dispatch functional test 1 fail (dual-stdin no-op) -> 0 fail",
+      "exit": "converged"
+    }
+  ],
+  "verification": "bash -n clean on both hook scripts; all 3 JSON manifests (plugin.json, marketplace.json, hooks.json) parse via json.load; embedded python in both hooks extracted and py_compile-clean; the embedded default calibration table in effortmine/SKILL.md parses and carries the 4 expected classes with version 0 / proven false; both hooks functionally tested against a throwaway CLAUDE_PLUGIN_ROOT: happy path writes valid JSONL, degrade-to-silence on missing+corrupt table, fail-open on malformed stdin, non-Task tool skipped, and a shell-metachar injection in subagent_type was slug-rejected to null with no execution (PWNED not created); all 6 agent + 2 skill frontmatters parse and use only keys from the R1b-verified allowlist with valid effort levels; the 5 miner bodies confirmed byte-identical by single sha256; sibling-owned bench/ confirmed untouched (git status clean) and no bench/state created in-repo.",
+  "notes": "Scaffold complete, no stubs/TODOs. THE MECHANISM: Agent/Task tool has no per-spawn effort param (R1/R1b verified), so per-subagent effort is achieved by shipping 5 tier-pinned worker agents (miner-low..max) byte-identical except frontmatter effort:{low,medium,high,xhigh,max}; the effortmine skill selects a tier by choosing which miner to dispatch. effort-grader is the blind grader pinned effort:medium (one tier below workers per author precedent), input {task_id,prompt,rubric,artifact} with NO tier/agent field (blindness by payload shape). SHIPPED DEFAULT CALIBRATION TABLE (version 0, proven:false, model claude-opus-4-8, margin_delta 0.10): T1-mechanical->low, T2-simple-transform->medium, T3-moderate-reasoning->high, T4-hard-reasoning->xhigh; max deliberately reserved (session-only, most expensive); every class confidence:low n_graded:0 — a monotone difficulty->effort ladder, an honest a-priori guess the pilot replaces. HOOKS: SessionStart(startup|resume|clear)->session-start.sh prints one ambient line only when calibration.json exists (silent otherwise), sanitizes fitted_date before echo. PostToolUse(matcher Task)->log-dispatch.sh appends {ts,source,tool_name,agent_type,session_effort,session_id} to bench/state/dispatch-log.jsonl, fail-open, json.dumps escaping + slug guard, reads effort from payload effort.level then $CLAUDE_EFFORT; both self-resolve CLAUDE_PLUGIN_ROOT and degrade to silence without python3. DEVIATIONS FROM 03 PROPOSED TREE (all per B1 task spec, intentional): (1) orchestrator skill named effortmine not calibrate; bench skill named effort-bench not bench. (2) 5 miner tiers (low..max, matching the 5 effort levels) instead of 03's worker-{low,med,high}; no task-author agent (bench/tasks fixtures already ship rubrics/checkers authored by R4). (3) protocols NOT duplicated into skills/_shared — they already exist at Claude-Production-Grade-Suite/.protocols/ and are build-time provenance; skills inline the visual-identity rules to stay self-contained at runtime. (4) effortmine kept as one SKILL.md with numbered phases rather than split phases/ files (flow is compact; 03's lazy-phase style referenced). (5) added hooks/log-dispatch.sh (PostToolUse telemetry) per B1 spec, beyond 03's session-start-only hooks. (6) effort-bench references the 04 sec9.1 subcommand set validate|run|grade|analyze|report|calibrate (the harness the sibling builds), not 03's older init|classify|record set. plugin.json single-sources the version (marketplace.json carries no version, so no drift). agents:'./agents/' path key mirrors engram's explicit skills/hooks path wiring."
+}
