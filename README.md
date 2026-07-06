@@ -1,6 +1,6 @@
 # effortmining
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.3.0-blue)
 ![status](https://img.shields.io/badge/status-pilot--proven-brightgreen)
 ![effort](https://img.shields.io/badge/effort-low%E2%80%A6max%20(5%20tiers)-green)
 ![telemetry](https://img.shields.io/badge/telemetry-100%25%20local-green)
@@ -83,6 +83,14 @@ The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** o
 **Scope — all five API effort levels were swept; the two pseudo-levels are out by construction.** `low/medium/high/xhigh/max` all ran (that is where the `uniform_max` row in `bench/RESULTS.md` §5 comes from — 9,520 tokens, 6.4x the calibrated policy at identical quality). `auto` is not a level — it resolves to the model's static default, i.e. the `high` column on Opus 4.8. `ultracode` is deliberately not benchmarked: it is a Claude Code setting, not an API effort level — it sends `xhigh` to the model and additionally changes *orchestration* (dynamic multi-agent workflows), is not requestable via `--effort`/settings/env, and comparing a whole workflow against a single tier-pinned invocation would not be a like-for-like test of per-invocation effort (see `docs/research/01b-docs-verification.md`).
 
 Reproduce it once installed: `/effort-bench validate` then `/effort-bench run`.
+
+## Using it — ambient by default, precise on demand
+
+**Ambient (no command, just install it).** A SessionStart hook injects a two-line dispatch policy into every session, derived live from the fitted calibration table. From then on, whenever Claude delegates a subtask to a subagent on its own, it is nudged to pick the tier-pinned worker for that subtask's difficulty class (`miner-low` for mechanical work, `miner-high` for diagnosis/logic, and so on) instead of a default agent at inherited effort. No slash command required; a refit automatically updates the injected policy. An explicit effort request from you always overrides it.
+
+**Precise (`/effortmine <request>`).** The full orchestrator: decomposes your request into subtasks, classifies each against the T1–T4 rubric, reads the calibration table, dispatches every subtask at its calibrated tier, and logs the dispatches. Use it when you hand over a multi-part job and want the classification done deliberately rather than opportunistically.
+
+**Measured (`/effort-bench`).** Re-run the benchmark yourself — Phase 0 instrument gate, the matrix, grading, analysis, report — or refit the table for a different model.
 
 ## Install
 

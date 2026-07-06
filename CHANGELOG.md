@@ -4,6 +4,20 @@ All notable changes to effortmining are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-06
+
+Ambient mode: the plugin now works with zero commands — install it and calibrated dispatch happens on its own.
+
+### Added
+
+- **Ambient dispatch policy (SessionStart).** The SessionStart hook now injects a second, model-facing line derived live from `calibration.json`: whenever Claude delegates a subtask to a subagent, it is nudged to pick the tier-pinned `miner-<tier>` worker for that subtask's difficulty class instead of a default agent at inherited effort. A refit automatically changes the injected policy; class slugs and tier names are allowlist-sanitized before echo; an explicit user effort request always overrides the policy. `/effortmine` remains the deliberate, full-pipeline path.
+- **`LICENSE` (MIT)** — the README badge finally has the file to back it.
+- **README "Using it" section** — ambient / precise (`/effortmine`) / measured (`/effort-bench`), in that order.
+
+### Notes
+
+- First public release.
+
 ## [0.2.0] — 2026-07-06
 
 Pilot benchmark completed; its measured numbers are folded into the shipped docs and the calibration table.

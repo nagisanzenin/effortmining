@@ -50,5 +50,36 @@ else:
     when = "fitted (date unknown)"
 
 print(f"[effortmining] calibration table {n} cells, {when} · /effortmine to dispatch calibrated")
+
+# Ambient dispatch policy — a compact, model-facing nudge derived from the
+# table itself, so a refit automatically changes the policy. Every echoed
+# token is allowlist-sanitized (class slugs, tier names) per 03 A2.
+TIERS = {"low", "medium", "high", "xhigh", "max"}
+pairs = []
+caveated = []
+warnings = data.get("warnings") or []
+warn_text = " ".join(w for w in warnings if isinstance(w, str))
+for cls in sorted(classes):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,31}", cls):
+        continue
+    tier = (classes[cls] or {}).get("recommended_tier")
+    if tier not in TIERS:
+        continue
+    mark = ""
+    if cls in warn_text:
+        mark = "*"
+        caveated.append(cls)
+    pairs.append(f"{cls}->miner-{tier}{mark}")
+
+if pairs:
+    policy = ("[effortmining] ambient dispatch policy: when delegating a subtask "
+              "to a subagent, prefer the tier-pinned worker for its difficulty "
+              "class instead of a default agent: " + " · ".join(pairs) + ".")
+    if caveated:
+        policy += (" (*fit rests on tasks flagged too easy; prefer miner-xhigh "
+                   "for genuinely hard work in that class.)")
+    policy += (" Classify by the /effortmine rubric; an explicit user effort "
+               "request always overrides this policy.")
+    print(policy)
 PY
 exit 0
