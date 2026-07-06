@@ -1,0 +1,100 @@
+{
+  "id": "X2",
+  "class": "X-composite",
+  "prompt": "Assess WidgetAPI release readiness for the 2.5 upgrade using the attached changelog, the current config JSON, and the migration notes. Complete the numbered subtask you are given.",
+  "documents": [
+    {
+      "title": "WidgetAPI Changelog",
+      "content": "# WidgetAPI Changelog\n## 2.5.0 - 2026-05-11\n- Added streamingExport (chunked export for very large result sets)\n## 2.4.0 - 2026-03-02\n- Added bulkExport (parallel export of up to 1000 records at once)\n- Added flags.betaSearch (opt-in)\n## 2.3.0 - 2026-01-15\n- Added rateLimiter\n## 2.2.0 - 2025-11-20\n- Initial export support (singleExport)\n"
+    },
+    {
+      "title": "Current config (JSON)",
+      "content": "{\n  \"timeouts\": {\n    \"connectMs\": 500,\n    \"readMs\": 3000,\n    \"writeMs\": 1500\n  },\n  \"retries\": 3,\n  \"flags\": {\n    \"betaSearch\": true,\n    \"streamingExport\": false,\n    \"auditLog\": true\n  }\n}"
+    },
+    {
+      "title": "WidgetAPI 2.x Migration Notes",
+      "content": "# WidgetAPI 2.x Migration Notes\n- 2.3: rateLimiter added; enabled by default; no action required.\n- 2.4: flags.betaSearch added (opt-in, default off); no action required.\n- 2.4: bulkExport added; backward compatible; no action required.\n- 2.5: BREAKING - the deprecated `legacy.exportMode` key is REMOVED. A config\n  that still sets `legacy.exportMode` will fail validation at startup. Remove it\n  before upgrading to 2.5. This is the ONLY breaking change in the entire 2.x\n  line; every other change listed above is backward compatible.\n"
+    }
+  ],
+  "checker": {
+    "type": "composite",
+    "aggregate": "mean_subtask_pass",
+    "n_subtasks": 5
+  },
+  "subtasks": [
+    {
+      "id": "X2.1",
+      "class": "mechanical",
+      "prompt": "Per the changelog, which version introduced `bulkExport`? Output the version in MAJOR.MINOR form (e.g. 2.4) between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "2.4"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X2.2",
+      "class": "transform",
+      "prompt": "From the config JSON, compute the total timeout budget in milliseconds = timeouts.connectMs + timeouts.readMs + timeouts.writeMs. Output only that integer between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "5000"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X2.3",
+      "class": "research-lite",
+      "prompt": "Per the migration notes, which single configuration key must be REMOVED before upgrading to 2.5? Output its exact key name between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "legacy.exportMode"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    },
+    {
+      "id": "X2.4",
+      "class": "coding",
+      "prompt": "Write a Python function `merge_config(defaults, override)` that returns a NEW dict: `defaults` updated with `override`, EXCEPT that any override entry whose value is None is ignored (the default is kept). It must NOT mutate either argument. Respond with a SINGLE ```python code block defining merge_config and nothing else.",
+      "checker": {
+        "type": "pytest-asserts",
+        "answer_convention": "python-code-block",
+        "entrypoint": "merge_config",
+        "asserts": [
+          "assert merge_config({'a': 1, 'b': 2}, {'b': 3}) == {'a': 1, 'b': 3}",
+          "assert merge_config({'a': 1}, {'a': None}) == {'a': 1}",
+          "assert merge_config({'a': 1}, {'c': 9}) == {'a': 1, 'c': 9}",
+          "assert merge_config({}, {}) == {}",
+          "assert merge_config({}, {'x': None}) == {}",
+          "_d = {'a': 1}; _ = merge_config(_d, {'a': 5}); assert _d == {'a': 1}",
+          "_o = {'a': None}; _ = merge_config({'a': 1}, _o); assert _o == {'a': None}"
+        ],
+        "timeout_s": 5
+      }
+    },
+    {
+      "id": "X2.5",
+      "class": "format",
+      "prompt": "Produce a one-line release-gate verdict EXACTLY matching this template, substituting the given values (keep literal spacing and separators):\n  GATE: <GO|NO-GO> | version=<v> | timeout_budget_ms=<n> | action=<action>\nwith verdict=NO-GO, v=2.5, n=5000, action=remove:legacy.exportMode. Put only the resulting line between <answer> and </answer> tags.",
+      "checker": {
+        "type": "exact",
+        "answer_convention": "sentinel-tags",
+        "expected": [
+          "GATE: NO-GO | version=2.5 | timeout_budget_ms=5000 | action=remove:legacy.exportMode"
+        ],
+        "canonicalize": "strip_outer_ws;rstrip_each_line"
+      }
+    }
+  ],
+  "max_output_guardrail": 1200,
+  "timeout_s": 300
+}
