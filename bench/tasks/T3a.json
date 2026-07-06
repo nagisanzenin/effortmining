@@ -1,0 +1,38 @@
+{
+  "id": "T3a",
+  "class": "T3-moderate-reasoning",
+  "title": "Find and fix the median bug",
+  "prompt": [
+    "The function below is meant to return the median of a list of numbers, but it is",
+    "buggy. Find the bug and return a corrected version.",
+    "",
+    "    def median(nums):",
+    "        s = sorted(nums)",
+    "        n = len(s)",
+    "        return s[n // 2]",
+    "",
+    "Correct behaviour:",
+    "  - For an odd-length list, the median is the middle element.",
+    "  - For an even-length list, the median is the average of the two middle",
+    "    elements (a float, e.g. the median of [1, 2, 3, 4] is 2.5).",
+    "You may assume the list is non-empty.",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining the corrected",
+    "median function and nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "median",
+    "asserts": [
+      "assert median([3, 1, 2]) == 2",
+      "assert median([1, 2, 3, 4]) == 2.5",
+      "assert median([7]) == 7",
+      "assert median([5, 5, 5, 5]) == 5",
+      "assert median([1, 10]) == 5.5"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "Requires recognizing that the given code silently mishandles even-length input (returns the upper-middle element, never averages). The fix is short but the diagnosis is the work. Hidden even-length asserts ([1,10]->5.5) fail any un-fixed or off-by-one variant. Expected to separate low (may miss the even case) from high."
+}

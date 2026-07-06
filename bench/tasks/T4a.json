@@ -1,0 +1,41 @@
+{
+  "id": "T4a",
+  "class": "T4-hard-reasoning",
+  "title": "final_balance — ledger with holds",
+  "prompt": [
+    "Write a Python function with this exact signature:",
+    "",
+    "    def final_balance(events):",
+    "",
+    "events is a list of (kind, amount) tuples. kind is one of 'deposit', 'withdraw',",
+    "'hold', 'release'; amount is a positive integer. Start with balance 0 and total",
+    "held 0. Process events in order:",
+    "  - 'deposit':  add amount to the balance.",
+    "  - 'hold':     increase the total held funds by amount (holds accumulate).",
+    "  - 'release':  decrease the total held funds by amount, but never below 0.",
+    "  - 'withdraw': allowed ONLY if the AVAILABLE funds (balance minus total held)",
+    "                are >= amount. If allowed, subtract amount from the balance.",
+    "                If not allowed, ignore the event entirely.",
+    "",
+    "Return the final AVAILABLE balance (balance minus total held) as an int.",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining final_balance",
+    "and nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "final_balance",
+    "asserts": [
+      "assert final_balance([]) == 0",
+      "assert final_balance([('deposit', 100), ('withdraw', 30)]) == 70",
+      "assert final_balance([('deposit', 100), ('hold', 40), ('withdraw', 70)]) == 60",
+      "assert final_balance([('deposit', 100), ('hold', 40), ('withdraw', 50), ('release', 40), ('withdraw', 50)]) == 0",
+      "assert final_balance([('deposit', 50), ('withdraw', 80)]) == 50",
+      "assert final_balance([('deposit', 100), ('hold', 30), ('hold', 30), ('release', 100)]) == 100"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 900,
+  "difficulty_rationale": "A stateful simulation whose correctness hinges on the AVAILABLE = balance - held invariant governing withdrawals, plus release clamping at 0 and the withdraw-vs-available (not vs balance) rule. Hidden asserts probe an ignored-withdraw path, a two-hold release-clamp path, and a chained withdraw/release. Low/medium likely to check withdraw against balance rather than available. Values self-consistency-verified against a reference implementation."
+}

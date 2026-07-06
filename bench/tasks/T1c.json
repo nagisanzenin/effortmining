@@ -1,0 +1,28 @@
+{
+  "id": "T1c",
+  "class": "T1-mechanical",
+  "title": "Tag list normalize, dedupe, sort",
+  "prompt": [
+    "You are given a comma-separated list of tags. Produce the canonical tag set:",
+    "  1. trim leading/trailing whitespace from each tag,",
+    "  2. convert to lowercase,",
+    "  3. remove duplicates,",
+    "  4. sort in ascending lexicographic (ASCII) order,",
+    "  5. join with a single comma and no spaces.",
+    "",
+    "INPUT:",
+    "Blue, red, GREEN, blue,  Yellow,red , green",
+    "",
+    "Output the single resulting line between <answer> and </answer> tags, nothing else."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "blue,green,red,yellow"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 300,
+  "difficulty_rationale": "A fixed sequence of string ops with a fully specified output. No judgement. Tests only careful execution of a 5-step recipe; expected high pass at all tiers."
+}

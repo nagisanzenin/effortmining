@@ -1,0 +1,26 @@
+{
+  "id": "T4b",
+  "class": "T4-hard-reasoning",
+  "title": "Count length-6 binary strings with no 3-in-a-row",
+  "prompt": [
+    "Consider strings of length 6 over the two-letter alphabet {H, T}.",
+    "",
+    "Count how many such strings contain NO run of three or more identical characters",
+    "in a row -- that is, strings in which neither 'HHH' nor 'TTT' appears as a",
+    "substring anywhere.",
+    "",
+    "Work out the exact count.",
+    "",
+    "Output ONLY the single integer between <answer> and </answer> tags."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "26"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 900,
+  "difficulty_rationale": "A counting problem that rewards a structured method -- a DP / recurrence over run lengths, or the runs-as-compositions insight giving 2*Fibonacci -- over brute enumeration of 64 cases. Easy to get subtly wrong by mis-handling the run-length-2 boundary. Answer brute-force-verified: 26. Expected to separate careful high-effort reasoning from quick low-effort guesses."
+}

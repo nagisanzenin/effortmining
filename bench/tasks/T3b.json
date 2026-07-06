@@ -1,0 +1,33 @@
+{
+  "id": "T3b",
+  "class": "T3-moderate-reasoning",
+  "title": "Four-friends drink assignment (unique solution)",
+  "prompt": [
+    "Four friends -- Ada, Ben, Cy, Dot -- each ordered a different drink from the set",
+    "{tea, cola, water, juice}. Use these clues to determine who ordered what:",
+    "",
+    "  1. Ada ordered neither tea nor water.",
+    "  2. Ben ordered neither cola nor juice.",
+    "  3. Cy ordered water.",
+    "  4. The name of the person who ordered juice comes strictly before the name of",
+    "     the person who ordered cola in alphabetical order.",
+    "",
+    "There is exactly one assignment consistent with all clues.",
+    "",
+    "Output the solution on a single line, using lowercase drink names, in exactly",
+    "this format (person order fixed, no spaces):",
+    "  Ada=<drink>,Ben=<drink>,Cy=<drink>,Dot=<drink>",
+    "",
+    "Output ONLY that line between <answer> and </answer> tags."
+  ],
+  "answer_convention": "sentinel-tags",
+  "checker": {
+    "type": "exact",
+    "expected": [
+      "Ada=juice,Ben=tea,Cy=water,Dot=cola"
+    ],
+    "canonicalize": "strip_outer_ws;rstrip_each_line"
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "A constraint-satisfaction puzzle requiring elimination (Cy=water, Ben=tea forced) then an alphabetical tiebreak on clue 4 to resolve Ada/Dot. Uniqueness brute-force-verified. Novel content (not a canonical published puzzle), so no memorized answer. Expected to reward the extra reasoning of higher tiers; low may stop at a non-unique guess."
+}

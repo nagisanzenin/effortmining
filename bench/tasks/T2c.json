@@ -1,0 +1,38 @@
+{
+  "id": "T2c",
+  "class": "T2-simple-transform",
+  "title": "business_days — inclusive weekday count",
+  "prompt": [
+    "Write a Python function with this exact signature:",
+    "",
+    "    def business_days(start: str, end: str) -> int:",
+    "",
+    "start and end are ISO dates in 'YYYY-MM-DD' form, with end >= start guaranteed.",
+    "Return the number of weekdays (Monday through Friday) in the inclusive date",
+    "range [start, end]. Do not consider public holidays. You may use only the Python",
+    "standard library.",
+    "",
+    "Examples:",
+    "  business_days('2026-07-06', '2026-07-06') -> 1   # a Monday",
+    "  business_days('2026-07-06', '2026-07-10') -> 5   # Mon..Fri",
+    "  business_days('2026-07-04', '2026-07-05') -> 0   # Sat + Sun",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining business_days",
+    "and nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "business_days",
+    "asserts": [
+      "assert business_days('2026-07-06', '2026-07-06') == 1",
+      "assert business_days('2026-07-06', '2026-07-10') == 5",
+      "assert business_days('2026-07-06', '2026-07-12') == 5",
+      "assert business_days('2026-07-04', '2026-07-05') == 0",
+      "assert business_days('2026-07-01', '2026-07-31') == 23"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 600,
+  "difficulty_rationale": "Date handling with an inclusive-range boundary and weekend exclusion. The full-month assert (July 2026 = 23 weekdays, verified) and the weekend-only assert punish off-by-one and half-open-range mistakes. Expected medium+ solid; low risks the inclusive boundary."
+}

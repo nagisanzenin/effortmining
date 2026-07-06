@@ -1,0 +1,42 @@
+{
+  "id": "T4c",
+  "class": "T4-hard-reasoning",
+  "title": "resolve — deterministic dependency ordering",
+  "prompt": [
+    "Write a Python function with this exact signature:",
+    "",
+    "    def resolve(deps):",
+    "",
+    "deps is a dict mapping each task name (a string) to a list of prerequisite task",
+    "names that must be completed before it. Simulate completion as follows:",
+    "  - Repeatedly look at all tasks that are not yet completed and whose",
+    "    prerequisites are ALL already completed.",
+    "  - Among those, complete the alphabetically smallest one and append its name to",
+    "    the result order.",
+    "  - Stop when no not-yet-completed task has all its prerequisites completed.",
+    "",
+    "Return the list of completed task names in completion order. If a cycle (or a",
+    "missing prerequisite) leaves some tasks never ready, they are simply never",
+    "completed and do not appear in the result.",
+    "",
+    "Respond with a SINGLE Python code block (```python ... ```) defining resolve and",
+    "nothing else. Include no explanation outside the code block."
+  ],
+  "answer_convention": "python-code-block",
+  "checker": {
+    "type": "pytest-asserts",
+    "entrypoint": "resolve",
+    "asserts": [
+      "assert resolve({}) == []",
+      "assert resolve({'a': []}) == ['a']",
+      "assert resolve({'b': ['a'], 'a': []}) == ['a', 'b']",
+      "assert resolve({'c': ['a', 'b'], 'a': [], 'b': []}) == ['a', 'b', 'c']",
+      "assert resolve({'a': ['b'], 'b': ['a']}) == []",
+      "assert resolve({'x': [], 'a': ['x'], 'b': ['x']}) == ['x', 'a', 'b']",
+      "assert resolve({'a': [], 'b': [], 'c': ['a']}) == ['a', 'b', 'c']"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_tokens": 900,
+  "difficulty_rationale": "Topological ordering with two non-obvious requirements the hidden asserts enforce: a deterministic alphabetical tiebreak among simultaneously-ready tasks (re-evaluated each step, not a one-shot sort), and graceful partial output on cycles (returns [] rather than looping or erroring). Reference-implementation-verified. Expected to reward higher tiers that handle the cycle and tiebreak correctly."
+}
