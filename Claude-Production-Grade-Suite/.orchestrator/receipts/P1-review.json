@@ -1,0 +1,21 @@
+{
+  "task_id": "P1-review",
+  "agent": "code-reviewer",
+  "status": "complete",
+  "artifacts": [
+    "findings delivered as agent text output to team-lead (findings.md file write blocked by harness report-file policy; full content in the P1 final message)"
+  ],
+  "metrics": {
+    "critical": 0,
+    "high": 1,
+    "medium": 4,
+    "low": 9,
+    "verified_correct": 18
+  },
+  "effort": {
+    "files_read": 34,
+    "files_written": 1,
+    "tool_calls": 12
+  },
+  "notes": "Read-only review. Stats (Wilson, Newcombe method-10, NI rule, TOST-90, seeded bootstrap, ceiling reference, RQ3 Pareto) hand-verified correct in an isolated scratch dir; grading/resumability/parallel-append/hook-injection-safety verified. Headline: H1 = build_calibration stamps version:1 (fitted) on any run incl --mock with no provenance, and the committed bench/state/calibration.json is non-credible placeholder data (T4-hard recommends low at pass 1.0, zero-width CI) that must be regenerated from the real pilot before ship. No CRITICAL defect affects the in-flight real numbers. No repo subcommands run; bench/state and bench/raw untouched except a read of committed calibration.json."
+}
