@@ -1,7 +1,7 @@
 # 04 — A/B Benchmark Methodology & Pilot Task Suite
 
 **Task R4 · Data Scientist · effortmining**
-**Status:** design complete, pre-registered. Awaiting Gate A approval before any run.
+**Status:** design complete, pre-registered. **Gate A PASSED (2026-07-06) — pilot n=3 (180 runs) approved.** Revised to fold in R1 telemetry forensics + R2 literature inputs.
 **Date:** 2026-07-06 · **Benchmark model (binding):** `claude-opus-4-8` · **CLI verified:** Claude Code `2.1.201`
 
 ---
@@ -10,6 +10,8 @@
 
 effortmining ships one thing of value: a **default calibration table** that tells the plugin, per class of subagent task, the *cheapest reasoning-effort tier that does not measurably hurt quality*. This document is the scientific protocol that produces that table with real numbers and proves the plugin's headline claim. It is pre-registered: every threshold, decision rule, and constant below is fixed **before** any data is seen (Appendix B). Nothing here may be run until the user approves at the gate; Section 4 (Phase 0) is the first thing the engineer executes after approval.
 
+**Unit of analysis.** The plugin assigns effort to a *subagent role*, which maps to a task-**class** — not to individual prompts. So the unit of calibration is the class, and per-prompt variation is within-class noise to be averaged over (Section 5.4 pools to class level for exactly this reason). Every decision rule below is framed per class/role.
+
 ### 0.1 The niche this benchmark exploits (given, verified upstream)
 
 From the docs-verification agent (source-cited, treat as given):
@@ -17,6 +19,7 @@ From the docs-verification agent (source-cited, treat as given):
 - Effort levels are `low | medium | high | xhigh | max`. Opus 4.8 supports all five; the model **default is `high`**. API surface: `output_config.effort`.
 - **Adaptive thinking self-regulates *within* a fixed level.** Nothing in Claude Code selects the level *per task*: a spawned subagent **inherits the session effort** unless a static `effort:` frontmatter key overrides it. There is **no per-invocation effort parameter** (the model has one; *effort* does not). That gap — static, inherited, uncalibrated effort — is exactly what effortmining fills.
 - Instrument: headless `claude -p --effort <level> --model claude-opus-4-8` is documented and session-scoped (flag overrides settings). The env var **`CLAUDE_CODE_EFFORT_LEVEL` takes precedence over everything** — the harness must guarantee it is UNSET (Section 4.4).
+- **Effort is invisible to cost telemetry (R1 binary forensics, CLI 2.1.201):** the `--output-format json` envelope and transcript `usage` carry **no `effort` field**. Effective effort (post any silent downgrade) is observable only out-of-band — a hook payload's `effort.level`, or `$CLAUDE_EFFORT` inside a Bash step. Consequence: the harness *injects* effort via `--effort` and must **verify it landed** separately (Section 4.6), recording requested **and** effective effort on every run (Section 9.3).
 
 If effort did not modulate behavior in headless mode, the entire premise fails; **Phase 0.3 tests exactly that** and aborts the run if it does not hold.
 
@@ -41,14 +44,29 @@ Consequence of the missing `--seed`: run-order randomization and reproducibility
 | ID | Question | How answered | Extra runs? |
 |---|---|---|---|
 | **RQ1** | How do **pass rate** and **token cost** scale with effort tier within each difficulty class? | Descriptive curves per (class, tier) from the full 5-tier matrix. | — (matrix) |
-| **RQ2** | What is the **cheapest tier per class** that is **non-inferior** to `max`? | Pre-registered non-inferiority rule (Section 5.4) applied to class-aggregated cells. Produces `calibration.json`. | — (matrix) |
-| **RQ3 (headline A/B)** | How much does a **calibrated** policy save vs the **status-quo inheritance** policy (all subagents at the session level) and vs **uniform-high**, at equal-or-better aggregate quality? | Policies composed arithmetically from the *same* matrix cell means. Bootstrap CI on the savings %. | **none** — reuses matrix |
+| **RQ2** | What is the **cheapest tier per class** that is **non-inferior** to the quality ceiling (typically `max`)? | Pre-registered non-inferiority rule (Section 5.4) applied to class-aggregated cells; equivalence test for easy classes. Produces `calibration.json`. | — (matrix) |
+| **RQ3 (headline A/B)** | Does a **calibrated** policy dominate all three status-quo baselines — **inheritance@`xhigh`**, **uniform-`high`** (model default), and **uniform-`low`** (Anthropic's "low for subagents" heuristic) — on **token-normalized quality**? | Policies composed arithmetically from the *same* matrix cell means; Pareto verdict + bootstrap CIs. | **none** — reuses matrix |
 
 **Headline claim to be tested (may fail — that is a real outcome):**
 
-> *A class-calibrated effort policy uses **X% fewer output tokens** (95% CI) than the inheritance policy at a power-user session level (`xhigh`), while its aggregate pass rate is non-inferior (difference CI lower bound ≥ −5pp).*
+> *A class-calibrated effort policy is **Pareto-superior** to every status-quo baseline: vs **inheritance@`xhigh`** and **uniform-`high`** it uses **X% / Y% fewer output tokens** (95% CI) at **non-inferior** aggregate pass rate (difference CI lower bound ≥ −δ_agg); vs **uniform-`low`** it delivers **materially higher** aggregate pass rate (difference CI lower bound > 0) at only modestly more tokens. We claim victory only if calibrated is **un-dominated by all three**.*
 
-The status-quo baseline is **inheritance at `xhigh`**, chosen because a power user running a demanding session sets a high session effort and *every* spawned subagent silently inherits it — the precise waste effortmining claims to remove. We also report vs **uniform-`high`** (the model default) as a second, more conservative baseline.
+Three baselines, all composed from the same matrix cells (no extra runs):
+- **inheritance@`xhigh`** — the status quo: a power user sets a high session effort and *every* spawned subagent silently inherits it (the waste effortmining removes).
+- **uniform-`high`** — the model default; a more conservative comparison.
+- **uniform-`low`** — Anthropic's documented static heuristic ("use low effort for subagents"); the interesting failure mode is that a blanket-low policy tanks hard-class quality, which calibrated must beat.
+
+*Model-internal adaptive thinking is active and self-regulating within every cell at every tier (a within-level mechanism that cannot be disabled on Opus 4.8). It is therefore a **constant background factor across all cells**, not an experimental arm — our tiers are the outer control it operates inside.*
+
+### 1.2 Pre-registered hypotheses (difficulty × effort interaction)
+
+The R2 literature review (Section 11) predicts an **interaction** between task difficulty and the effort→quality curve. We pre-register the shape so the analysis is confirmatory, not exploratory:
+
+- **H1 — Easy classes (T1, T2): quality flat, cost not.** Pass rate at ceiling across all five tiers; output tokens at `low` are **50–75% below** `high`/`xhigh`. Because we predict *parity* (not merely "not worse"), easy classes get an **equivalence test** (TOST, margin δ_equiv = 10 pp) that can affirmatively show `low ≈ ceiling` — stronger than one-sided non-inferiority. *(Prior: the Opus 4.5 announcement's medium effort matching Sonnet-4.5 SWE-bench at −76% output tokens; Snell 2408.03314.)*
+- **H2 — Hard classes (T3, T4): saturating gains.** Pass rate rises with effort but with **diminishing returns** — single-digit to ~20 pp total from `low`→`max`, most captured by mid tiers. Analyzed with **non-inferiority** (one-sided) against the quality ceiling.
+- **H3 — Overthinking tail at `max` on hard classes.** At the top tier quality may be **flat-or-down** while tokens keep climbing. Pre-registered descriptive flag: *overthinking iff `p̂_max ≤ p̂_xhigh` **and** `median_out(max) > median_out(xhigh)`*. Because of H3 the non-inferiority **reference is the empirical quality-ceiling tier** (arg-max pooled pass rate, ties → cheaper), **not** mechanically `max` (Section 5.4). *(Prior: Chen 2412.21187 on LLM overthinking.)*
+
+These hypotheses are falsifiable and reported as confirmed / refused in RESULTS.md regardless of outcome.
 
 ---
 
@@ -75,7 +93,7 @@ The status-quo baseline is **inheritance at `xhigh`**, chosen because a power us
 
 ### 2.1 Answer-parsing conventions (pre-registered, deterministic)
 
-- **`<answer>` tags** (exact tasks): the harness extracts the text between the first `<answer>` and the next `</answer>`. **Canonicalization** = strip outer whitespace, then `rstrip` each line (removes trailing spaces / a trailing newline). Compare `==` against the same-canonicalized `expected`. No tags found → `parse_fail` (counts as fail, tracked separately, Section 6.3).
+- **`<answer>` tags** (exact tasks): the harness extracts the text between the first `<answer>` and the next `</answer>`. **Canonicalization** = strip outer whitespace, then `rstrip` each line (removes trailing spaces / a trailing newline). Compare `==` against the same-canonicalized `expected`. No tags found → `parse_fail` (counts as fail, tracked separately, Section 6).
 - **```python code block** (pytest tasks): the harness extracts the **last** fenced `python` block (fallback: last fenced block of any language). It appends the task's hidden `asserts`, then runs the combined program in a sandboxed subprocess (Section 9.4). All asserts pass → `pass`. `AssertionError` / exception / missing entrypoint → `wrong_answer`. No block → `parse_fail`. Timeout → `timeout`.
 
 Prompts instruct the model to emit **only** the answer/code block, so preamble and any leaked reasoning are separated from the graded payload.
@@ -117,17 +135,21 @@ Recommendation: **run Phase 0, then the n=3 pilot (180 runs, ≈$8, ≈2.3 h seq
 - **Per-run nonce:** each run's prompt is wrapped `"[run-id: <uuid4>]\n\n" + prompt`. The nonce is inert (the task never references it) but makes every user turn unique, preventing prompt-cache reuse of a prior run's answer and any replicate-to-replicate leakage.
 - **Politeness:** default **concurrency 3**; exponential backoff (base 2s, cap 60s, jitter) on rate-limit/5xx; per-run hard timeout 300s; resumable so an interrupted sweep never re-bills completed cells (Section 9).
 
+### 3.4 Why per-subagent effort is where the money is
+
+Effort savings look small per call and compound at the system level. Agentic, multi-agent workloads consume on the order of **~15× the tokens of a single chat turn**, and in Anthropic's multi-agent engineering analysis **token usage explains ≈80% of the variance in task performance** (Section 11) — tokens are simultaneously the dominant cost driver *and* the dominant performance driver. Because subagents **inherit** the session effort (Section 0.1), a power-user session at `xhigh` pays the top-tier output-token rate on *every* spawned agent, including the mechanical ones that gain nothing from it. Right-sizing effort per subagent role therefore multiplies: an X% output-token reduction on each low-value subagent scales with the fan-out. RQ3 quantifies that reduction on a concrete 12-task workload; the per-run numbers in Section 3.2 are the per-subagent unit this multiplication acts on.
+
 ---
 
 ## 4. Phase 0 — instrument validation (gate before the matrix)
 
-Phase 0 is a **hard gate**: the matrix does not run until all four checks pass. Output: `bench/phase0-report.json`. Command: `effort.py validate`.
+Phase 0 is a **hard gate**: the matrix does not run until every check below (4.1–4.6) passes. Output: `bench/phase0-report.json`. Command: `effort.py validate`.
 
 ### 4.1 Flag acceptance & envelope capture
 For **each** tier: `claude -p --effort <tier> --model claude-opus-4-8 --output-format json "Reply with the single word: ok"`. Confirm exit 0 and that stdout parses as JSON. Record which tiers are accepted.
 
-### 4.2 Envelope field enumeration
-Dump the JSON keys and **bind the harness to the actual field names discovered here.** Expected (Claude Code result envelope — confirm, do not assume): `type, subtype, is_error, duration_ms, duration_api_ms, num_turns, result, session_id, total_cost_usd, usage{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}, modelUsage`. **Critical question to resolve here:** does `usage.output_tokens` **include thinking tokens**? If yes, it is our primary cost metric. If the envelope reports `total_cost_usd` (billed truth), prefer it for the dollar column; if absent, compute cost from token counts × prices. Record the answer; it changes which column is "primary" in Section 6.
+### 4.2 Envelope field binding (confirmed by R1)
+R1's binary forensics on CLI 2.1.201 confirmed the live `--output-format json` envelope carries: **`total_cost_usd`**, **`duration_ms`**, **`usage{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`**, and **`modelUsage{<model>: {costUSD, …}}`** (plus `session_id` when present). The harness binds to these exact names (Section 9.3); Phase 0 still dumps the full key set to catch any 2.1.x drift. **One question to resolve empirically here:** does `usage.output_tokens` **include thinking tokens**? Test with a fixed-short-answer probe — if `output_tokens` still climbs `low→max` while the final answer length is constant, thinking is counted in `output_tokens`. Cross-check by reconciling `total_cost_usd` against `input_tokens×$5/M + output_tokens×$25/M`: agreement confirms `output_tokens` is the billable output count (our primary cost metric); `total_cost_usd` is the billed-truth dollar column regardless.
 
 ### 4.3 Effort-modulation check (premise test)
 On a fixed novel reasoning probe (NOT a suite task), run each tier ×3. Confirm output/thinking tokens are **roughly monotone increasing** `low→max`. **Pass criterion:** median `max` output tokens ≥ **2×** median `low` output tokens on the probe. If not monotone / no separation → effort is a no-op in headless mode → **ABORT** and take a fallback (4.6).
@@ -143,10 +165,17 @@ Phase 0 prints the sanitized env subset it will use for every run.
 ### 4.5 Overhead / latency sizing
 Time N=5 trivial runs on 2 tiers to estimate startup + per-tier latency; set the wall-time budget and confirm the 300s hard timeout is comfortably above `max`-tier latency on a hard task. Replaces the Section 3.2 estimates with measured numbers.
 
-### 4.6 Abort criteria & fallbacks
+### 4.6 Effort-fidelity check — requested == effective (R1)
+Because effort is absent from cost telemetry (Section 0.1), a silently-downgraded run is indistinguishable from an honest one in the envelope. The harness installs a lightweight **capture hook** (via a dedicated `--settings` file; not compatible with `--bare`, which we do not use) on the hook event whose stdin payload carries `effort.level` + `session_id` (Phase 0 identifies the exact event; R1 confirms the field exists and reports the **post-downgrade effective** level). The hook appends `{session_id, effort_level}` to a sidecar JSONL; the harness joins it to each run by `session_id`.
+- **Phase 0 gate:** for all five tiers on `claude-opus-4-8`, confirm **requested == effective** (this simultaneously confirms Opus 4.8 honors all five levels). Any tier that downgrades is unusable → abort/adjust (4.7).
+- **Every matrix run:** record `effort_requested` and `effort_effective` (Section 9.3). **On mismatch the run is invalid for its cell** — discard and retry; if a cell cannot be filled with faithful runs, mark it incomplete.
+- **Out of scope:** the `effort` parameter also accepts an *integer* (zod `enum | int`) with undocumented semantics — the pilot uses **named tiers only**; integer effort is not studied.
+
+### 4.7 Abort criteria & fallbacks
 | Failure | Fallback |
 |---|---|
 | A tier's `--effort` value rejected | Route effort via `--settings <file>` (`output_config.effort`) or `CLAUDE_CODE_EXTRA_BODY='{"output_config":{"effort":"<tier>"}}'`; re-run 4.1. |
+| A tier downgrades (requested ≠ effective, 4.6) | Drop that tier from the matrix, or route via the settings-file effort key and re-verify; never silently accept a downgraded cell. |
 | Envelope lacks token counts | Parse from `--output-format stream-json` events, or fall back to `total_cost_usd` only + document. |
 | Effort not monotone (4.3 fails) | Stop. Escalate: effort may be inherited differently under `-p`; investigate the settings-file route before spending on the matrix. |
 | `CLAUDE_CODE_EFFORT_LEVEL` present & unclearable | Hard stop — the level cannot be trusted per-run. |
@@ -165,32 +194,39 @@ Time N=5 trivial runs on 2 tiers to estimate startup + per-tier latency; set the
 - Pass rates: **Wilson 95% score interval** (correct for small n and near-0/1 rates).
 - Token totals & the policy savings %: **stratified bootstrap** (10,000 resamples), resampling replicate runs *within each cell* to preserve the design, 95% percentile CI.
 
-### 5.4 The non-inferiority decision rule (RQ2) — pre-registered
+### 5.4 The calibration decision rule (RQ2) — pre-registered
 
-Per-task cells (n=3) are underpowered, so the calibration decision is made at the **class level**: pool the 3 tasks × n reps into one Bernoulli sample per (class, tier) — **9 trials/cell at n=3**, 15 at n=5. Per-task curves are kept **descriptive** (RQ1) only.
+Per-task cells (n=3) are underpowered, so the decision is made at the **class level** (the unit the plugin actually assigns effort to): pool the 3 tasks × n reps into one Bernoulli sample per (class, tier) — **9 trials/cell at n=3**, 15 at n=5. Per-task curves stay **descriptive** (RQ1).
 
-Fixed constants: non-inferiority margin **δ = 0.10** (10 pp); reference = the class's `max`-tier pass rate.
+**Reference = the quality-ceiling tier.** `p_ref` = arg-max pooled pass rate over tiers (ties → cheaper tier). This is **typically `max`**, but per H3 (overthinking) it may be `xhigh` on a hard class; anchoring to the empirical ceiling rather than mechanically to `max` prevents recommending a tier that is "non-inferior to a degraded `max`" yet actually worse than the best tier. Fixed margin **δ = 0.10** (10 pp).
 
-A tier *t* is **non-inferior to `max`** for a class iff **both**:
-1. **Point-estimate guard:** `p̂_t ≥ p̂_max − δ`, and
-2. **Interval guard:** the **Newcombe 95% CI lower bound for the difference `(p_t − p_max)` is ≥ −δ`** (equivalently, no evidence the tier is worse than `max` by more than 10 pp).
+**Non-inferiority (all classes; the calibration selector).** A tier *t* is non-inferior iff **both**: (1) `p̂_t ≥ p̂_ref − δ`, and (2) the **Newcombe 95% lower bound of `(p_t − p_ref)` ≥ −δ`. The **recommended tier** = the **cheapest** non-inferior tier (lowest median output tokens; tie-break total tokens → wall time), written to `calibration.json`.
 
-**Cheapest non-inferior tier** for a class = among all non-inferior tiers, the one with the **lowest median output tokens** (tie-break: total tokens, then wall time). That tier is the class's recommended default in `calibration.json`.
+**Equivalence, additionally, for easy classes (H1: T1, T2).** Where we predict flat quality, we run a **TOST equivalence test** (margin δ_equiv = 10 pp): `low` is *equivalent* to the ceiling iff the 90% CI of `(p_low − p_ref)` lies entirely within `[−δ_equiv, +δ_equiv]`. Passing TOST upgrades that class's `confidence` to **`high (equivalence-confirmed)`** and licenses the stronger report claim "`low` is statistically equivalent to `max`," not merely "not worse."
 
-Honest reading at pilot n: with 9 trials/cell the Wilson/Newcombe intervals are wide. "Non-inferior" here means *"no evidence of >10 pp degradation"*, **not** proof of parity. Classes whose decision is ambiguous (interval straddles the margin such that two adjacent tiers both qualify by point estimate but neither's interval clears) are marked **`low-confidence`** and are the priority for the n=5 extension.
+**Overthinking flag (H3: hard classes).** Independently record, per class, whether `p̂_max ≤ p̂_xhigh` **and** `median_out(max) > median_out(xhigh)`; if so, flag an overthinking tail in RESULTS.md.
+
+Honest reading at pilot n: with 9 trials/cell the Wilson/Newcombe/TOST intervals are wide. Non-inferiority means *"no evidence of >10 pp degradation"* and equivalence means *"consistent with parity within 10 pp"* — neither is proof at this power. Ambiguous classes (margin straddled) are marked **`low-confidence`** and prioritized for the n=5 extension.
 
 ### 5.5 Policy comparison (RQ3) — computed, no new runs
-Workload = one run of each of the 12 tasks (equal weight); a class-weighted variant is also reported. Policies assign a tier to each task:
+Workload = one run of each of the 12 tasks (equal weight); a class-weighted variant is also reported. Each policy assigns a tier per task:
 
+- **`P_calibrated`** — each task at its class's RQ2 recommended tier.
 - **`P_inherit_xhigh`** — every task at `xhigh` (status-quo inheritance, power-user session).
 - **`P_uniform_high`** — every task at `high` (model default).
-- **`P_calibrated`** — each task at its class's RQ2 recommended tier.
-- Bookends **`P_uniform_max`**, **`P_uniform_low`** for context.
+- **`P_uniform_low`** — every task at `low` (Anthropic's "low for subagents" heuristic).
+- Bookend **`P_uniform_max`** for context.
 
-For each policy: expected aggregate pass rate = mean over tasks of the cell-mean pass rate at the assigned tier; expected output tokens = sum over tasks of the cell-mean output tokens at the assigned tier. **Savings%** vs baseline B = `(tok_B − tok_calibrated) / tok_B × 100`, with a **bootstrap 95% CI** (resample within cells, recompute both policies each draw). The aggregate pass-rate difference gets its own difference-CI (margin **δ_agg = 0.05**, tighter because the aggregate pools all 12 tasks × n).
+For each policy: expected aggregate pass rate = mean over tasks of the cell-mean pass rate at the assigned tier; expected output tokens = sum over tasks of the cell-mean output tokens at the assigned tier. For each baseline B, **Savings%** = `(tok_B − tok_calibrated)/tok_B × 100` and the **aggregate pass-rate difference** `(pass_calibrated − pass_B)`, each with a **bootstrap 95% CI** (resample within cells, recompute both policies per draw). Aggregate non-inferiority margin **δ_agg = 0.05** (tighter — the aggregate pools all 12 tasks × n).
+
+**Victory condition (pre-registered, Pareto).** Calibrated "wins" iff it is **un-dominated by all three baselines** and strictly better than each on at least one axis:
+- vs `inherit_xhigh` and `uniform_high`: **token savings > 0** (CI excludes 0) at **non-inferior** quality (pass-difference CI lower bound ≥ −δ_agg);
+- vs `uniform_low`: **quality gain > 0** (pass-difference CI lower bound > 0) — calibrated must buy back the hard-class quality that blanket-low sacrifices, at acceptable extra tokens.
+
+If any leg fails we report the honest partial result (e.g. "calibrated ties uniform-low on this suite" or "savings CI includes 0"): the plugin's value claim is only as strong as the leg that holds.
 
 ### 5.6 Pre-registered limitations (stated before data)
-Small n (class-level pooling mitigates but power is low); single model (calibration is Opus-4.8-specific, re-fit per model); **no temperature control** (nondeterminism is the object of replication, not a nuisance to remove); prompt-cache effects (mitigated by per-run nonce; residual system-prompt cache read is tier-invariant and only touches cheap input cost); exact-match strictness (mitigated by explicit formats + `parse_fail` tracked separately, so we can tell strictness-failures from reasoning-failures); single machine (wall time is operational, not a scientific variable); subscription billing (dollars are API-equivalents). Full threats section in RESULTS.md (Section 8).
+Small n (class-level pooling mitigates but power is low); single model (calibration is Opus-4.8-specific, re-fit per model); **no temperature control** (nondeterminism is the object of replication, not a nuisance to remove); **adaptive thinking is a constant background factor** (within-level, not disable-able on Opus 4.8) so measured tier effects are *net of* it; the **overthinking tail** (H3), if present, means `max` is not always the ceiling — handled by the ceiling-referenced rule (5.4); **effort-fidelity** depends on the capture hook — runs whose effective effort is unverified or mismatched are excluded (4.6); prompt-cache effects (mitigated by per-run nonce; residual system-prompt cache read is tier-invariant and only touches cheap input cost); exact-match strictness (mitigated by explicit formats + `parse_fail` tracked separately, so we can tell strictness-failures from reasoning-failures); single machine (wall time is operational, not a scientific variable); subscription billing (dollars are API-equivalents). Full threats section in RESULTS.md (Section 8).
 
 ---
 
@@ -221,18 +257,19 @@ Separating `parse_fail` from `wrong_answer` is essential: if a tier "fails" only
   "suite_version": "pilot-12",
   "margin_delta": 0.10,
   "classes": {
-    "T1-mechanical":        {"recommended_tier": "<tier>", "confidence": "high|low", "n_graded": 9, "pass_rate": 0.0, "pass_rate_max": 0.0, "delta_vs_max": 0.0, "median_out_tokens": 0},
+    "T1-mechanical":        {"recommended_tier": "<tier>", "confidence": "high|high(equiv)|low", "n_graded": 9, "pass_rate": 0.0, "ceiling_tier": "<tier>", "pass_rate_ref": 0.0, "delta_vs_ref": 0.0, "median_out_tokens": 0, "equivalence_low": null, "overthinking": false},
     "T2-simple-transform":  {"...": "..."},
     "T3-moderate-reasoning":{"...": "..."},
     "T4-hard-reasoning":    {"...": "..."}
   },
   "policy": {
-    "baseline_inherit_tier": "xhigh",
+    "baselines": {"inherit_xhigh": "xhigh", "uniform_high": "high", "uniform_low": "low"},
     "savings_pct_vs_inherit_xhigh": {"point": 0.0, "ci95": [0.0, 0.0]},
     "savings_pct_vs_uniform_high":  {"point": 0.0, "ci95": [0.0, 0.0]},
+    "quality_gain_vs_uniform_low":  {"point": 0.0, "ci95": [0.0, 0.0]},
     "aggregate_pass_calibrated": 0.0,
-    "aggregate_pass_inherit_xhigh": 0.0,
-    "noninferior_agg": true
+    "noninferior_agg": true,
+    "undominated": true
   }
 }
 ```
@@ -255,9 +292,9 @@ Sections, in order:
 1. **Run manifest** — model, CLI version, seed, dates, N per cell, completed/excluded counts.
 2. **Matrix table** — pass rate + median output tokens for every (task, tier); `api_error`/`parse_fail` footnotes.
 3. **Per-class curves** — pass rate vs tier and output tokens vs tier (data tables + ASCII/gnuplot-free text sparklines), with Wilson CIs.
-4. **Calibration table** — the RQ2 result: recommended tier per class, confidence, Δ-vs-max, cost.
-5. **Policy headline (RQ3)** — the A/B: "calibrated policy used **X%** (95% CI a–b) fewer output tokens than inheritance-at-`xhigh` at aggregate pass **P_cal vs P_inh** (difference CI, non-inferior: yes/no)", plus the uniform-high comparison and the bookends.
-6. **Threats to validity** — the honest Section 5.6 list, instantiated with what actually happened (wide CIs, any aborted cells, any mis-classed task per the re-labeling check below).
+4. **Calibration table** — the RQ2 result: recommended tier per class, confidence (incl. `equivalence-confirmed` for easy classes that pass TOST), Δ-vs-ceiling, cost; plus the **hypothesis scorecard** (H1/H2/H3 confirmed or refused) and any **overthinking-tail** flag.
+5. **Policy headline (RQ3)** — the three-arm Pareto A/B: "calibrated used **X% / Y%** (95% CI) fewer output tokens than inheritance@`xhigh` / uniform-`high` at non-inferior aggregate pass, **and** scored **+Z pp** (95% CI) over uniform-`low`", with the **un-dominated** verdict and the `uniform_max` bookend.
+6. **Threats to validity** — the honest Section 5.6 list, instantiated with what actually happened (wide CIs, any aborted/downgraded cells, any mis-classed task per the re-labeling check below).
 
 **Task re-labeling check (descriptive):** if a task's pooled `low`-tier pass rate ≥ **0.8**, flag it as *possibly mis-classed* (too easy for its class). It is surfaced in the report, not silently moved; a mis-classed task weakens that class's difficulty signal and the reader must know.
 
@@ -283,21 +320,26 @@ Sections, in order:
 - `checker.type=="pytest-asserts"`: `entrypoint` (required fn name, for diagnostics), `asserts` (array of Python assert lines), `timeout_s`.
 
 ### 9.3 `results.jsonl` record schema
+Bound to R1-confirmed envelope field names (Section 4.2) — token/cost/duration keys mirror the envelope verbatim:
 ```json
-{"task_id":"T2a","class":"T2-simple-transform","tier":"high","rep":1,
- "seed":20260706,"nonce":"<uuid4>","ts_start":"...","ts_end":"...","duration_ms":0,
- "session_id":"...","tokens_in":0,"tokens_out":0,"tokens_total":0,
- "cache_read":0,"cache_creation":0,"cost_usd":0.0,
+{"task_id":"T2a","class":"T2-simple-transform","tier":"high",
+ "effort_requested":"high","effort_effective":"high","effort_effective_source":"hook",
+ "rep":1,"seed":20260706,"nonce":"<uuid4>","ts_start":"...","ts_end":"...",
+ "duration_ms":0,"session_id":"...",
+ "input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,
+ "total_cost_usd":0.0,"model_usage":{},
  "raw_answer_path":"bench/raw/T2a/high/1.txt","exit_status":0,"api_error":false,"retries":0}
 ```
 `grade` adds: `{"pass":true,"checker_type":"pytest-asserts","failure_class":"none","checker_detail":"6/6 asserts"}`.
-`max_output_tokens` is an **anomaly threshold** (flag runaway/looping runs whose `tokens_out` grossly exceeds it for a low tier), **not** a CLI cap — see 4.4.
+- **`effort_effective`** comes from the Section 4.6 capture hook (`effort_effective_source:"hook"`); if the hook is unavailable the run is `"unverified"` and does **not** count toward a cell. **`effort_requested != effort_effective` ⇒ run invalid for its cell** (discard + retry).
+- `total_tokens` is derived (`input_tokens + output_tokens`); `total_cost_usd` is the envelope's billed-truth dollar figure.
+- `max_output_tokens` (from the task file) is an **anomaly threshold** (flag runaway/looping runs whose `output_tokens` grossly exceeds it for a low tier), **not** a CLI cap — see 4.4.
 
 ### 9.4 pytest sandbox (best-effort, documented)
 Run the assembled program (`extracted code + asserts`) as `python3 -I -S <tmpfile>` in a fresh temp dir, with an explicitly minimal env, `resource` limits (CPU seconds ≈ `timeout_s`, address-space cap), and a wall-clock `subprocess` timeout. Network is not hard-blocked on macOS without a sandbox profile; residual risk is low (benign coding tasks, model-generated), and is documented in RESULTS.md. If run on Linux/CI, wrap in `unshare -n` or a seccomp/nsjail profile for true network isolation.
 
 ### 9.5 Telemetry alignment
-Each record mirrors the receipt-protocol `effort{}` convention (files/tool counts → here tokens/duration/cost) so benchmark spend rolls into the same cost dashboard the orchestrator reads. The JSONL *is* the accumulation substrate the runtime `calibrate` refits from.
+Each record mirrors the receipt-protocol `effort{}` convention (files/tool counts → here tokens/duration/cost) so benchmark spend rolls into the same cost dashboard the orchestrator reads. The JSONL *is* the accumulation substrate the runtime `calibrate` refits from. **Future live-telemetry source (not needed for the pilot harness):** the Claude Code transcript JSONL (`~/.claude/projects/*/*.jsonl`) carries `message.usage` per message and `isSidechain:true` for subagent attribution — the plugin can later mine real per-subagent effort/token receipts from it to feed `calibrate`, closing the loop from benchmark to production.
 
 ---
 
@@ -309,6 +351,17 @@ Each record mirrors the receipt-protocol `effort{}` convention (files/tool count
 | **Oracle hierarchy** — executable > adversarial/blind > self-check (self never terminates); prefer deterministic checkers | production-grade `loop-protocol.md` (Rule 1) | All 12 tasks use Tier-1 executable oracles (exact-match, unit-test-pass). No loop terminates on model self-judgment. |
 | **Receipt / effort telemetry** — every unit writes a JSONL/JSON record; align `effort{}` fields | production-grade `receipt-protocol.md` | `results.jsonl` schema (9.3); this task's own receipt at `.orchestrator/receipts/R4-methodology.json`. |
 | **Guarded refit** — sample-gated, clamped, single-step, human-readable update | engram FSRS scheduler | Runtime `calibrate` rule (7.2). |
+
+---
+
+## 11. External evidence & references (from R2 literature review)
+
+These are **external priors** surfaced by R2's literature review, used to pre-register the hypothesis shapes (Section 1.2) and frame the economics (Section 3.4). They motivate the design; our own numbers come from the matrix, and any conflict is resolved in favor of the measured Opus-4.8 data.
+
+- **Snell et al., 2024 — "Scaling LLM Test-Time Compute Optimally…"** (arXiv **2408.03314**). Test-time compute trades tokens for quality with strongly diminishing returns that depend on problem difficulty → motivates the H1/H2 difficulty × effort interaction.
+- **Chen et al., 2024 — on the overthinking of o1-like LLMs** (arXiv **2412.21187**). More reasoning tokens can fail to help or even hurt on easy problems → motivates H3 (overthinking tail) and the ceiling-referenced decision rule.
+- **Anthropic — Claude Opus 4.5 announcement.** Reports **medium** effort matching Sonnet-4.5 SWE-bench at **−76% output tokens** → prior that effort trades tokens for ~equal quality on many tasks (H1). *(Announcement concerns Opus 4.5; our study measures Opus 4.8.)*
+- **Anthropic — multi-agent engineering blog.** Multi-agent systems consume **~15× chat tokens**, and **token usage explains ≈80% of performance variance** → the economics case (Section 3.4) that per-subagent effort right-sizing is where spend is won or lost.
 
 ---
 
@@ -381,10 +434,11 @@ Verified facts baked into oracles: `2026-07-06` is a **Monday**, `2026-07-04` a 
 | Pilot replicates n | 3 (→ 9 trials per class×tier) |
 | NI margin δ (per-class) | 0.10 (10 pp) |
 | NI margin δ_agg (policy aggregate) | 0.05 (5 pp) |
+| Equivalence margin δ_equiv (TOST, easy classes) | 0.10 (10 pp) |
 | Pass-rate CI | Wilson 95% |
 | Difference / token CI | Newcombe (diff) & stratified bootstrap 95%, 10,000 resamples |
-| Status-quo baseline | inheritance @ `xhigh` |
-| Secondary baseline | uniform `high` |
+| RQ3 baselines (3) | inheritance @ `xhigh`, uniform `high`, uniform `low` |
+| NI / equivalence reference | empirical quality-ceiling tier (arg-max pass; typically `max`) |
 | Cheapest-tier tie-break | median output tokens → total tokens → wall time |
 | Run-order seed | 20260706 |
 | Per-run timeout | 300 s |
@@ -393,28 +447,39 @@ Verified facts baked into oracles: `2026-07-06` is a **Monday**, `2026-07-04` a 
 | Refit move size | single tier step |
 | Mis-classed-task flag | pooled low-tier pass ≥ 0.80 |
 | Effort-modulation pass (Phase 0.3) | median(max out) ≥ 2× median(low out) |
+| Effort-fidelity gate (Phase 0.6) | requested == effective for all 5 tiers on opus-4-8 |
+| Overthinking flag (H3) | p̂_max ≤ p̂_xhigh ∧ median_out(max) > median_out(xhigh) |
+| RQ3 victory | calibrated un-dominated by all 3 baselines (Pareto) |
 
-## Appendix C — Non-inferiority decision, in pseudocode
+## Appendix C — Decision rules, in pseudocode
 
 ```
+# RQ2: per-class calibration (ceiling-referenced; H1 equivalence; H3 overthinking flag)
 for class in classes:
-    p_max, n_max = pooled_pass_rate(class, "max")          # 3 tasks x n reps
+    ref_tier   = argmax_tier(pooled_pass_rate(class, t) for t in TIERS)  # ties -> cheaper
+    p_ref, n_r = pooled_pass_rate(class, ref_tier)
     candidates = []
     for tier in ["low","medium","high","xhigh","max"]:
-        p_t, n_t = pooled_pass_rate(class, tier)
-        point_ok   = p_t >= p_max - DELTA                   # DELTA = 0.10
-        diff_lo, _ = newcombe_diff_ci(p_t, n_t, p_max, n_max, 0.95)
-        interval_ok = diff_lo >= -DELTA
-        if point_ok and interval_ok:
+        p_t, n_t   = pooled_pass_rate(class, tier)
+        point_ok   = p_t >= p_ref - DELTA                    # DELTA = 0.10
+        diff_lo, _ = newcombe_diff_ci(p_t, n_t, p_ref, n_r, 0.95)
+        if point_ok and diff_lo >= -DELTA:
             candidates.append((median_out_tokens(class, tier), tier))
-    recommended = min(candidates)[1]                        # cheapest non-inferior
-    confidence  = "low" if ambiguous_margin(class) else "high"
+    recommended = min(candidates)[1]                         # cheapest non-inferior
+    if class in EASY_CLASSES:                                # H1: TOST equivalence of low
+        lo90, hi90 = ci90(diff(p_low, p_ref))
+        confidence = "high(equiv)" if (lo90 >= -DELTA_EQUIV and hi90 <= DELTA_EQUIV) else confidence
+    overthinking[class] = (p_max <= p_xhigh) and (median_out(max) > median_out(xhigh))  # H3
 ```
 ```
-# RQ3 policy composition (no new runs)
-for policy in [inherit_xhigh, uniform_high, calibrated, uniform_max, uniform_low]:
-    tok  = sum(cell_mean_out_tokens(task.class, policy.tier_for(task)) for task in suite)
-    pass = mean(cell_mean_pass(task.class, policy.tier_for(task)) for task in suite)
-savings_vs_inherit = (tok[inherit_xhigh] - tok[calibrated]) / tok[inherit_xhigh] * 100
-# bootstrap over within-cell replicates for the 95% CI on savings and on (pass_cal - pass_inherit)
+# RQ3: policy composition + Pareto victory (no new runs)
+for policy in [calibrated, inherit_xhigh, uniform_high, uniform_low, uniform_max]:
+    tok[policy]  = sum(cell_mean_out_tokens(task.class, policy.tier_for(task)) for task in suite)
+    pass[policy] = mean(cell_mean_pass(task.class, policy.tier_for(task))       for task in suite)
+save_xhigh = (tok[inherit_xhigh] - tok[calibrated]) / tok[inherit_xhigh] * 100
+save_high  = (tok[uniform_high]  - tok[calibrated]) / tok[uniform_high]  * 100
+ni_agg     = all(boot_lo(pass[calibrated] - pass[B]) >= -DELTA_AGG for B in [inherit_xhigh, uniform_high])
+gain_low   = boot_lo(pass[calibrated] - pass[uniform_low]) > 0
+victory    = (save_xhigh > 0 and save_high > 0 and ni_agg) and gain_low   # un-dominated by all three
+# bootstrap over within-cell replicates for every CI above
 ```
