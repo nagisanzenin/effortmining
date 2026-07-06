@@ -58,8 +58,8 @@ That constraint dictates the design. To offer five selectable effort tiers at di
        │
        │  classify subtask -> class
        ▼
-  read calibration.json ──────────────┐   (version 0 default until the
-       │  class -> recommended_tier   │    pilot fits a version >= 1 table)
+  read calibration.json ──────────────┐   (version 1, fitted by the
+       │  class -> recommended_tier   │    2026-07-06 pilot)
        ▼                              │
   dispatch miner-<tier>               │
        │                              │

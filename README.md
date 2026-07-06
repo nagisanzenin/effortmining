@@ -1,7 +1,7 @@
 # effortmining
 
 ![version](https://img.shields.io/badge/version-0.1.0-blue)
-![status](https://img.shields.io/badge/status-pre--pilot%20scaffold-orange)
+![status](https://img.shields.io/badge/status-pilot--proven-brightgreen)
 ![effort](https://img.shields.io/badge/effort-low%E2%80%A6max%20(5%20tiers)-green)
 ![telemetry](https://img.shields.io/badge/telemetry-100%25%20local-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -17,7 +17,7 @@ Claude Code lets you pin a subagent's reasoning effort (`low` through `max`), an
 | A per-subagent effort **calibration layer**: classify a subtask, dispatch it at the tier proven cheapest-sufficient for its class | A new model or a fine-tune. It operates Anthropic's shipped `effort` knob as a black box |
 | A **shipped Claude Code plugin** — skills, tier-pinned agents, hooks, and a deterministic benchmark harness | A per-*prompt* oracle. The unit of calibration is the task *class*, not the individual prompt |
 | **Honest about provenance**: the science (Snell, Ares) and the knob (Anthropic) already exist; this is the productized per-subagent layer | The first to think of difficulty-adaptive compute. It is the first to *ship* it per-subagent for a production harness |
-| **Measured**: a pre-registered A/B benchmark fits the table from real pass/token data | Vibes. Numbers come from `bench/effort.py`, not assertion (pilot pending) |
+| **Measured**: a pre-registered A/B benchmark fits the table from real pass/token data | Vibes. Numbers come from `bench/effort.py`, not assertion (pilot complete, 2026-07-06) |
 
 ## The mechanism
 
@@ -31,8 +31,8 @@ Claude Code lets you pin a subagent's reasoning effort (`low` through `max`), an
                │  3. look up the class
      ┌─────────▼──────────┐
      │  calibration.json  │   cheapest tier per class
-     │  (fitted table)    │      (fitted from the benchmark;
-     └─────────┬──────────┘       ships with unproven defaults)
+     │  (fitted table)    │      (fitted from the pilot benchmark;
+     └─────────┬──────────┘       version 1, 2026-07-06)
                │  4. tier -> agent
    ┌───────────┼───────────────────────────┐
    ▼           ▼             ▼               ▼
@@ -57,13 +57,28 @@ Claude Code lets you pin a subagent's reasoning effort (`low` through `max`), an
 - **The closest research is Ares — per-step, unshipped.** *Ares: Adaptive Reasoning Effort Selection for Efficient LLM Agents* (Yang et al., arXiv 2603.07915, Mar 2026) trains an outcome-labeled router that picks effort **per decision-step within one agent's loop** (up to −52.7% tokens). effortmining differs on three axes: granularity (**per-subagent role**, not per-step), productization (**a shipped plugin** operating the vendor's black-box knob, not a fine-tuned router), and method (**offline A/B benchmark calibration**, not an online per-step model). See `docs/research/02-literature-review.md`.
 - **The economics are large.** Multi-agent systems use ~15x the tokens of chat, and token usage explains ~80% of performance variance (Anthropic). Calibrating a handful of recurring subagent roles captures most of the waste.
 
-## Numbers — pending pilot benchmark
+## Measured results (pilot, 2026-07-06)
 
-This scaffold ships **no measured results yet**. The calibration table it dispatches from is an a-priori difficulty-to-effort ladder (`version: 0`, marked unproven). The pre-registered pilot benchmark — 12 tasks x 5 effort tiers x 3 reps = 180 runs on `claude-opus-4-8` — fills in the real pass-rate and token curves and fits a `version >= 1` table.
+The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** on `claude-opus-4-8`: 0 API errors, 0 effort-fidelity violations, 175/180 pass (5 `wrong_answer`, 0 `parse_fail`). It fit the `version: 1` calibration table the plugin now dispatches from. Full report: `bench/RESULTS.md`; methodology pre-registered in `docs/research/04-benchmark-methodology.md`.
 
-> _Headline claim to be tested (may fail — that is a real outcome):_ a class-calibrated effort policy uses **X% fewer output tokens** (95% CI) than the status-quo inheritance policy (every subagent at `xhigh`), while aggregate pass rate stays non-inferior (difference CI lower bound >= −5pp).
+> _Headline claim (pre-registered RQ3) — **HELD**:_ a class-calibrated effort policy uses **64.7% fewer output tokens** (bootstrap 95% CI [60.9, 67.7]) than the status-quo inheritance policy (every subagent at `xhigh`), at **equal** aggregate pass rate (1.000 vs 1.000). It also beat the model-default `uniform-high` by **20.5%** fewer tokens [12.3, 27.8], and out-scored the `uniform-low` heuristic by **+8.3 pp** aggregate pass (1.000 vs 0.917) — so it is **un-dominated** on the pre-registered Pareto test. This was a real test that could have failed; a null or negative result would have shipped as-is.
 
-Run it yourself once installed: `/effort-bench validate` then `/effort-bench run`. Methodology is pre-registered in `docs/research/04-benchmark-methodology.md`.
+**Per-class calibration (v1).** Pass rates pool 3 tasks x 3 reps = 9 trials per (class, tier). The recommended tier is the *cheapest* one non-inferior to that class's empirical quality ceiling (margin δ = 10 pp).
+
+| class | low | medium | high | xhigh | max | recommended | median out-tok @ rec |
+|---|---|---|---|---|---|---|---|
+| T1-mechanical | 9/9 | 9/9 | 9/9 | 9/9 | 9/9 | **low** | 33 |
+| T2-simple-transform | 9/9 | 9/9 | 9/9 | 9/9 | 9/9 | **low** | 121 |
+| T3-moderate-reasoning | 6/9 | 7/9 | 9/9 | 9/9 | 9/9 | **high** | 157 |
+| T4-hard-reasoning | 9/9 | 9/9 | 9/9 | 9/9 | 9/9 | **low** † | 141 |
+
+**What each tier costs** — median output tokens pooled across the suite: low **101** → medium **101** → high **158** → xhigh **295** → max **696**. The top tier burns ≈ **6.9x** the bottom tier for the same work.
+
+**Overthinking is real (H3, confirmed in all four classes).** `max` spends strictly more tokens than `xhigh` with **zero** pass-rate gain in every class, so the non-inferiority reference is each class's empirical ceiling tier, never mechanically `max` — which is why no class is calibrated to `max`.
+
+**Honest caveats — this is a pilot.** n = 3 reps/cell, so per-class confidence is **low** by design: the pre-registered Wilson/bootstrap intervals are wide, and "non-inferior" means *no evidence of >10 pp degradation*, not proof of parity. **† T4's three tasks were flagged by the pre-registered misclassification check** (all pass at `low` — too easy for Opus 4.8), so T4's `low` recommendation reflects the *task-suite difficulty ceiling*, not a claim that hard reasoning needs no effort; harder T4 tasks are queued as future work. **T3 is the class with the real quality gradient**: `low` fails a third of the time (6/9) while `high` is the sweet spot (157 median tokens for 9/9, vs `max`'s 648 for the same 9/9). Single model, self-contained prompt-only tasks, one machine — re-fit per model.
+
+Reproduce it once installed: `/effort-bench validate` then `/effort-bench run`.
 
 ## Install
 

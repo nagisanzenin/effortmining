@@ -1,0 +1,37 @@
+{
+  "task_id": "P2-writer",
+  "agent": "technical-writer",
+  "phase": "DOCUMENT",
+  "status": "complete",
+  "artifacts": [
+    "README.md",
+    "CHANGELOG.md",
+    "agents/miner-low.md",
+    "agents/miner-medium.md",
+    "agents/miner-high.md",
+    "agents/miner-xhigh.md",
+    "agents/miner-max.md",
+    "skills/effortmine/SKILL.md",
+    "docs/architecture.md"
+  ],
+  "metrics": {
+    "files_updated": 9,
+    "placeholders_removed": 19,
+    "headline_status": "HELD",
+    "headline_savings_vs_inherit_xhigh": "64.7% fewer output tokens, bootstrap 95% CI [60.9, 67.7], at equal aggregate pass (1.000 vs 1.000)",
+    "secondary_savings_vs_uniform_high": "20.5% [12.3, 27.8]",
+    "quality_gain_vs_uniform_low": "+8.3 pp (1.000 vs 0.917)",
+    "pareto_verdict": "un-dominated",
+    "calibration_v1": "T1->low, T2->low, T3->high, T4->low(flagged-too-easy)",
+    "token_ladder_pooled": "low 101 / medium 101 / high 158 / xhigh 295 / max 696 (max ~6.9x low)",
+    "grade_taxonomy": "175 pass / 5 wrong_answer / 0 parse_fail of 180"
+  },
+  "effort": {
+    "files_read": 14,
+    "files_written": 10,
+    "tool_calls": 46
+  },
+  "loops": [],
+  "verification": "Every number cross-checked against bench/RESULTS.md and bench/state/calibration.json before writing: per-class pass counts (T3 low 6/9, medium 7/9; all others 9/9), median-out tokens at recommended tier (T1 33, T2 121, T3 157, T4 141), RQ3 savings + CIs (64.7% [60.9,67.7] vs inherit@xhigh; 20.5% [12.3,27.8] vs uniform-high; +8.3pp vs uniform-low), overthinking H3 flagged all four classes, undominated=true. Preserved the load-bearing invariant: all five miner bodies remain byte-identical after edits (md5 347ffa2804a4935a4b2920379fed7536 on lines 6+, re-verified), only the frontmatter description field changed; name:/effort: untouched. Consistency grep over the 9 files for pending/unproven/pre-pilot/X%/to-be-tested returns clean except one intentional CHANGELOG line documenting the badge rename ('pre-pilot scaffold -> pilot-proven'). SKILL.md mission-control result box re-checked at 63 display columns per row (multibyte box/dot chars accounted for). Scope: git status shows exactly the 9 assigned files modified plus this receipt; bench/, docs/research/, hooks/, .claude-plugin/ untouched.",
+  "notes": "Exact headline sentence written (README blockquote): 'Headline claim (pre-registered RQ3) - HELD: a class-calibrated effort policy uses 64.7% fewer output tokens (bootstrap 95% CI [60.9, 67.7]) than the status-quo inheritance policy (every subagent at xhigh), at equal aggregate pass rate (1.000 vs 1.000). It also beat the model-default uniform-high by 20.5% fewer tokens [12.3, 27.8], and out-scored the uniform-low heuristic by +8.3 pp aggregate pass (1.000 vs 0.917) - so it is un-dominated on the pre-registered Pareto test. This was a real test that could have failed; a null or negative result would have shipped as-is.' Honest caveats travel with every numbers surface (README results section, both miner-low/miner-xhigh descriptions, SKILL.md fallback JSON T4 caveat + closing line, CHANGELOG notes): n=3/cell => per-class confidence low; T4 low rests on pre-registered-misclassification-flagged (too-easy-for-Opus-4.8) tasks, harder T4 queued; T3 is the class with the real gradient (low 6/9, high sweet spot at 157 med tok vs max's 648); single model / prompt-only / one machine. SKILL.md fallback table now mirrors v1 EXACTLY (T1 low, T2 low, T3 high, T4 low + inline caveat that a cautious user prefers xhigh for genuinely hard work until the suite is extended), relabeled 'fitted pilot v1 snapshot (2026-07-06)' - it is no longer an unproven pre-pilot ladder but the no-file fallback still. All five miner descriptions updated: miner-low names T1/T2 + T4-caveat; miner-high names T3; miner-medium/xhigh/max state that no class currently calibrates to them and when a caller should still pick them (medium = one-step hedge above low; xhigh/max = tasks harder than the pilot suite; max also carries the overthinking-tail warning). VERSION DISAGREEMENT (flagged per instructions): CHANGELOG.md now documents [0.2.0] but .claude-plugin/plugin.json still reads 0.1.0 and the README version badge stays 0.1.0 to match the manifest (README declares plugin.json the single source of the version, so I did not bump the badge past the manifest). plugin.json is not my file; the 0.2.0 CHANGELOG entry carries an explicit 'bump the manifest to 0.2.0 to reconcile' note. Whoever owns .claude-plugin should bump plugin.json (and then the README version badge) to 0.2.0 together. The '## Honest claims' README section was left fully intact per instructions."
+}

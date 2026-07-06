@@ -1,6 +1,6 @@
 ---
 name: miner-low
-description: "Delegate worker pinned to LOW reasoning effort, the cheapest tier. Pick for mechanical retrieval, extraction, and reformatting with an explicit output template and no reasoning required (T1-mechanical class; calibration pending pilot benchmark). Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to LOW reasoning effort, the cheapest tier. Pick for mechanical retrieval, extraction, and reformatting with an explicit output template and no reasoning required. Pilot v1 (2026-07-06) calibrates this tier for T1-mechanical and T2-simple-transform, and also for T4-hard-reasoning — but T4's pilot tasks were flagged too easy, so prefer xhigh for genuinely hard reasoning until the suite is extended. Identical to the other miner agents except its effort frontmatter."
 effort: low
 ---
 

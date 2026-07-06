@@ -12,7 +12,7 @@ Read this whole file before acting.
 
 ## What this does, and does NOT, do
 
-**Does:** class-level effort calibration. It maps each subtask to one of four difficulty *classes* and dispatches at the tier the calibration table recommends for that class. On a proven table that is a measured, benchmark-backed choice; on the shipped default table it is an honest guess, marked as such.
+**Does:** class-level effort calibration. It maps each subtask to one of four difficulty *classes* and dispatches at the tier the calibration table recommends for that class. The shipped table is fitted from the pilot benchmark (v1, 2026-07-06), so that choice is measured and benchmark-backed; if the live table is missing, the skill falls back to an embedded snapshot of those same v1 values.
 
 **Does NOT: per-prompt magic.** There is no model that reads a specific prompt and divines its exact optimal effort. The unit of calibration is the *class*, not the individual prompt. Two different T3 subtasks get the same tier. If you need a specific subtask run at a specific effort, say so and it is honored over the table.
 
@@ -47,33 +47,32 @@ Rules of thumb when torn: if a correct answer needs *no* deliberation, it is T1.
 
 Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/research/04-benchmark-methodology.md` section 7.1):
 
-- top-level `version` (>= 1 means fitted from real benchmark data; `0` means shipped default, unproven), `fitted_date`, `model`, `margin_delta`.
+- top-level `version` (>= 1 means fitted from real benchmark data; `0` would mean an un-fitted a-priori default), `fitted_date`, `model`, `margin_delta`.
 - `classes.<class>.recommended_tier` in `low | medium | high | xhigh | max`, plus `confidence`, `n_graded`, and the measured pass-rate / token fields.
 
-**If `$CALIB` is absent or unreadable, fall back to the shipped default table below**, and tell the user you are using unproven pre-pilot defaults, not measured numbers.
+**If `$CALIB` is absent or unreadable, fall back to the embedded snapshot below** — the fitted pilot v1 values — and tell the user you are dispatching from the shipped v1 snapshot because the live calibration file could not be read (measured, but possibly older than the installed file).
 
-### Shipped default table (pre-pilot defaults, UNPROVEN)
+### Embedded fallback table — fitted pilot v1 snapshot (2026-07-06)
 
 ```json
 {
-  "version": 0,
-  "source": "pre-pilot-default",
-  "proven": false,
-  "fitted_date": null,
+  "version": 1,
+  "source": "fitted-pilot-snapshot",
+  "fitted_date": "2026-07-06",
   "model": "claude-opus-4-8",
   "suite_version": "pilot-12",
   "margin_delta": 0.10,
-  "note": "A monotone difficulty-to-effort ladder chosen a priori. NOT measured. The pilot benchmark (docs/research/04) replaces this with a fitted version>=1 table; until then treat these as a reasonable guess, not evidence.",
+  "note": "Snapshot of the fitted pilot v1 table (bench/state/calibration.json). Shown here only as the no-file fallback; the installed file is authoritative and may be newer. Per-class confidence is 'low' at the pilot's n=3/cell.",
   "classes": {
-    "T1-mechanical":         {"recommended_tier": "low",    "confidence": "low", "n_graded": 0, "rationale": "explicit template, no reasoning; expected near-ceiling at every tier"},
-    "T2-simple-transform":   {"recommended_tier": "medium", "confidence": "low", "n_graded": 0, "rationale": "one well-specified transform, light local reasoning"},
-    "T3-moderate-reasoning": {"recommended_tier": "high",   "confidence": "low", "n_graded": 0, "rationale": "diagnosis / logic / trace; the model's own default tier"},
-    "T4-hard-reasoning":     {"recommended_tier": "xhigh",  "confidence": "low", "n_graded": 0, "rationale": "multi-step with overfit-punishing edges; max held in reserve"}
+    "T1-mechanical":         {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low; overthinking tail at max"},
+    "T2-simple-transform":   {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low (a-priori guess was medium; low tested non-inferior)"},
+    "T3-moderate-reasoning": {"recommended_tier": "high", "confidence": "low", "n_graded": 9, "rationale": "real quality gradient: low 6/9, high 9/9 at ~157 median out-tokens"},
+    "T4-hard-reasoning":     {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "caveat": "9/9 at low, BUT all three T4 pilot tasks were flagged too easy for Opus 4.8 by the misclassification check; a cautious user should prefer xhigh for genuinely hard work until the T4 suite is extended"}
   }
 }
 ```
 
-`max` is deliberately not a default for any class: it is reserved for a class the pilot *proves* needs it, because it is the most expensive tier and is session-only.
+`max` is recommended for no class: the pilot found an overthinking tail at `max` in every class (more tokens, no pass-rate gain), so it stays reserved for work harder than the pilot suite, never a default — it is the most expensive tier and is session-only.
 
 ## Phase 4 — Dispatch each subtask at its tier
 
@@ -106,7 +105,7 @@ After a subtask's worker returns, append one JSONL record to `$DLOG` so `effort-
 Record shape (controlled-vocabulary fields only; do NOT put raw subtask prompt text in the log, it is both an injection surface and noise):
 
 ```json
-{"ts":"<ISO-8601 UTC>","source":"effortmine","session_id":"<if known, else null>","task_class":"T3-moderate-reasoning","tier":"high","subagent_type":"miner-high","table_version":0,"accepted":null}
+{"ts":"<ISO-8601 UTC>","source":"effortmine","session_id":"<if known, else null>","task_class":"T3-moderate-reasoning","tier":"high","subagent_type":"miner-high","table_version":1,"accepted":null}
 ```
 
 `accepted` is `null` unless you also ran the artifact past `effort-grader` (optional here; the benchmark path in `/effort-bench` is where grading is systematic). `table_version` echoes the `version` of the table you dispatched from, so a refit can tell default-driven dispatches from calibrated ones.
@@ -124,8 +123,8 @@ Report back in mission-control style: no emoji, Unicode box-drawing characters, 
 │  ✓ T3-moderate      high    <one-line result>           │
 │  ✓ T4-hard          xhigh   <one-line result>           │
 │                                                         │
-│  N/N dispatched · table v0 (pre-pilot defaults)         │
+│  N/N dispatched · table v1 (fitted 2026-07-06)          │
 └─────────────────────────────────────────────────────────┘
 ```
 
-If you used the default table, end with one honest line: measured numbers are pending the pilot benchmark (`/effort-bench`), and these tiers are an unproven difficulty ladder, not evidence.
+If you fell back to the embedded snapshot (the live file was unreadable), add one honest line: you dispatched from the shipped pilot-v1 snapshot — measured, but possibly older than the installed `calibration.json` (refresh it with `/effort-bench`). Either way, note that at the pilot's n the per-class confidence is `low`, and T4's `low` tier rests on tasks the misclassification check flagged too easy — prefer `xhigh` for genuinely hard T4 work.
