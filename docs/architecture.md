@@ -69,7 +69,7 @@ That constraint dictates the design. To offer five selectable effort tiers at di
   blind effort-grader -> verdict      │
        │                              │
        ▼                              │
-  dispatch-log.jsonl + results ───────┤
+  graded bench results ───────────────┤
        │                              │
        │  effort.py calibrate         │
        ▼    (guarded: min-N,          │
@@ -78,7 +78,7 @@ That constraint dictates the design. To offer five selectable effort tiers at di
         only if the non-inferiority decision flips)
 ```
 
-Two things produce the log the loop feeds on: the `PostToolUse(Task)` hook records **every** dispatch automatically (the tier is derivable from the `miner-<tier>` agent name), and the `/effortmine` skill adds the semantic **task-class** label the hook cannot know. `calibrate` refits from the accumulated outcomes, guarded exactly like engram's FSRS refit (sample-gated at >= 9 per cell, clamped, single-step, human-readable diff) so a noisy handful of records cannot thrash the table.
+In 0.2.0 the refit loop feeds on **graded benchmark receipts** (`effort.py run` → `grade` → `calibrate`), guarded exactly like engram's FSRS refit (sample-gated at >= 9 per cell, clamped, single-step, human-readable diff) so a noisy handful of records cannot thrash the table. Dispatch telemetry is *collected* today from two producers — the `PostToolUse(Task)` hook records **every** dispatch automatically (the tier is derivable from the `miner-<tier>` agent name), and the `/effortmine` skill adds the semantic **task-class** label the hook cannot know — but folding that live log into the refit is **roadmap**, not a shipped loop; the 0.2.0 refit path consumes benchmark data only.
 
 ## The oracle discipline (why the grader is blind)
 

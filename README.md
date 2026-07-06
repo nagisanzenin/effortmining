@@ -1,6 +1,6 @@
 # effortmining
 
-![version](https://img.shields.io/badge/version-0.1.0-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 ![status](https://img.shields.io/badge/status-pilot--proven-brightgreen)
 ![effort](https://img.shields.io/badge/effort-low%E2%80%A6max%20(5%20tiers)-green)
 ![telemetry](https://img.shields.io/badge/telemetry-100%25%20local-green)
@@ -45,7 +45,9 @@ Claude Code lets you pin a subagent's reasoning effort (`low` through `max`), an
              raw result  ->  blind effort-grader (when non-deterministic)
                       │
                       ▼
-             dispatch-log.jsonl  ->  calibrate  ->  updated table
+             graded bench receipts  ->  calibrate  ->  updated table
+             (dispatch-log.jsonl is collected today; folding it
+              into the refit is roadmap, not yet a shipped loop)
 ```
 
 **The trick:** Claude Code's Agent/Task tool has **no per-spawn effort parameter**. You can override a subagent's `model` at the call site, but not its effort (verified against the installed CLI and the docs — see `docs/research/01-mechanism-investigation.md` and `01b-docs-verification.md`). The only place a subagent's effort can be set is its *definition frontmatter*. So effortmining ships one worker per tier — `miner-low` through `miner-max`, byte-identical except for `effort:` — and selecting a tier means dispatching to the matching agent. That indirection is the whole mechanism; there is no hidden API.
@@ -74,7 +76,7 @@ The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** o
 
 **What each tier costs** — median output tokens pooled across the suite: low **101** → medium **101** → high **158** → xhigh **295** → max **696**. The top tier burns ≈ **6.9x** the bottom tier for the same work.
 
-**Overthinking is real (H3, confirmed in all four classes).** `max` spends strictly more tokens than `xhigh` with **zero** pass-rate gain in every class, so the non-inferiority reference is each class's empirical ceiling tier, never mechanically `max` — which is why no class is calibrated to `max`.
+**Overthinking is real (H3, confirmed in all four classes) — as saturation, not regression.** `max` spends strictly more tokens than `xhigh` with **zero** pass-rate gain in every class (it never *lost* quality in the pilot; it bought nothing), so the non-inferiority reference is each class's empirical ceiling tier, never mechanically `max` — which is why no class is calibrated to `max`.
 
 **Honest caveats — this is a pilot.** n = 3 reps/cell, so per-class confidence is **low** by design: the pre-registered Wilson/bootstrap intervals are wide, and "non-inferior" means *no evidence of >10 pp degradation*, not proof of parity. **† T4's three tasks were flagged by the pre-registered misclassification check** (all pass at `low` — too easy for Opus 4.8), so T4's `low` recommendation reflects the *task-suite difficulty ceiling*, not a claim that hard reasoning needs no effort; harder T4 tasks are queued as future work. **T3 is the class with the real quality gradient**: `low` fails a third of the time (6/9) while `high` is the sweet spot (157 median tokens for 9/9, vs `max`'s 648 for the same 9/9). Single model, self-contained prompt-only tasks, one machine — re-fit per model.
 
