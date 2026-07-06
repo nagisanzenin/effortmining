@@ -1,0 +1,43 @@
+{
+  "id": "X1",
+  "class": "X-composite",
+  "title": "mini ETL job: extract, transform, implement, verify, report",
+  "prompt": [
+    "A five-step data-handling job. Each subtask is run as an independent call; they",
+    "are presented in order because later steps assume the earlier ones were done."
+  ],
+  "max_output_guardrail": 2000,
+  "timeout_s": 600,
+  "subtasks": [
+    {
+      "id": "s1-extract",
+      "class": "T1-mechanical",
+      "prompt": "From the line 'user=alice role=admin region=eu', extract the value of role. Output only the value between <answer> and </answer> tags.",
+      "checker": {"type": "exact", "expected": ["admin"], "canonicalize": "strip_outer_ws;rstrip_each_line"}
+    },
+    {
+      "id": "s2-runlength",
+      "class": "C-coding",
+      "prompt": "Write a Python function `rle(s)` returning the run-length encoding of a string (e.g. 'aaab' -> 'a3b'; single chars keep no count). Respond with a single ```python code block only.",
+      "checker": {"type": "pytest-asserts", "entrypoint": "rle", "asserts": ["assert rle('') == ''", "assert rle('aaab') == 'a3b'", "assert rle('abc') == 'abc'"], "timeout_s": 5}
+    },
+    {
+      "id": "s3-lookup",
+      "class": "R-research",
+      "prompt": "Using ONLY this note: 'The pilot ran 180 graded trials.' — state how many graded trials the pilot ran. Output only the number between <answer> and </answer> tags.",
+      "checker": {"type": "exact", "expected": ["180"], "canonicalize": "strip_outer_ws;rstrip_each_line"}
+    },
+    {
+      "id": "s4-normalize",
+      "class": "C-coding",
+      "prompt": "Write a Python function `normalize_phone(s)` that returns the last 10 digits formatted as '(NNN) NNN-NNNN', or 'INVALID' if fewer than 10 digits are present. Respond with a single ```python code block only.",
+      "checker": {"type": "pytest-asserts", "entrypoint": "normalize_phone", "asserts": ["assert normalize_phone('415-555-2671') == '(415) 555-2671'", "assert normalize_phone('12345') == 'INVALID'"], "timeout_s": 5}
+    },
+    {
+      "id": "s5-summarize",
+      "class": "T2-simple-transform",
+      "prompt": "Uppercase the word 'report'. Output only the result between <answer> and </answer> tags.",
+      "checker": {"type": "exact", "expected": ["REPORT"], "canonicalize": "strip_outer_ws;rstrip_each_line"}
+    }
+  ]
+}

@@ -103,6 +103,27 @@ SCALES = {
     "extended": {"reps": 5, "classes": None},
 }
 
+# --------------------------------------------------------------------------- #
+# Suite v2 constants (R-research / C-coding / X-composite task classes).       #
+# Every v2 path is strictly additive: with --suite v1 (default) the harness    #
+# behaves byte-for-byte as before. v2 adds long provided documents, a blind    #
+# LLM grader for non-deterministic work, and multi-subtask composite jobs run  #
+# under three policy arms.                                                     #
+# --------------------------------------------------------------------------- #
+SUITES = ("v1", "v2")
+COMPOSITE_CLASS = "X-composite"
+COMPOSITE_ARMS = ("calibrated", "inherit_xhigh", "uniform_high")
+ARM_FIXED_TIER = {"inherit_xhigh": "xhigh", "uniform_high": "high"}
+COMPOSITE_FALLBACK_TIER = "high"     # calibrated arm: class not yet in table -> high
+GRADER_MODEL = MODEL                 # blind grader runs on the same model...
+GRADER_EFFORT = "medium"             # ...pinned one tier below the miner workers
+GRADER_TIMEOUT_S = 180               # per grader-call subprocess timeout
+GRADER_RETRIES = 1                   # a grader parse failure is retried once, then flagged
+CHARS_PER_TOKEN = 4                  # stdlib token estimate (~4 chars/token, English prose)
+LONG_CONTEXT_TARGET_TOKENS = 10_000  # Phase 0 (v2) long-context probe input size
+V2_VALID_FAILURE_CLASSES = {"none", "wrong_answer", "parse_fail", "timeout",
+                            "blind_fail", "grading_error"}
+
 # Env vars that must never leak into a child `claude` process (04 Section 4.4).
 EFFORT_ENV_OVERRIDE = "CLAUDE_CODE_EFFORT_LEVEL"   # overrides --effort; hard error
 EXTRA_BODY_ENV = "CLAUDE_CODE_EXTRA_BODY"          # strip if it carries effort
@@ -153,18 +174,31 @@ def _is_transient_failure(res, env_json) -> bool:
 class Paths:
     """Resolves all harness file locations from a single root."""
 
-    def __init__(self, root: str, tasks_dir: str | None = None):
+    def __init__(self, root: str, tasks_dir: str | None = None, suite: str = "v1"):
         self.root = os.path.abspath(root)
-        self.tasks = os.path.abspath(tasks_dir) if tasks_dir else os.path.join(self.root, "tasks")
+        self.suite = suite
+        # Suite maps to a task dir and a state-file namespace. v1 keeps every path
+        # exactly as before; v2 gets a "-v2" suffix on its own state so the two
+        # suites never clobber each other. calibration.json is deliberately SHARED
+        # (v2 extends its class table; the composite arms consume it).
+        if tasks_dir:
+            self.tasks = os.path.abspath(tasks_dir)
+        elif suite == "v2":
+            self.tasks = os.path.join(self.root, "tasks-v2")
+        else:
+            self.tasks = os.path.join(self.root, "tasks")
+        sfx = "" if suite == "v1" else "-" + suite
         self.state = os.path.join(self.root, "state")
         self.raw = os.path.join(self.root, "raw")
         self.answers = os.path.join(self.raw, "answers")
-        self.results = os.path.join(self.raw, "results.jsonl")
-        self.phase0 = os.path.join(self.state, "phase0.json")
-        self.graded = os.path.join(self.state, "graded.jsonl")
-        self.analysis = os.path.join(self.state, "analysis.json")
+        self.results = os.path.join(self.raw, f"results{sfx}.jsonl")
+        self.results_composite = os.path.join(self.raw, "results-composite.jsonl")
+        self.phase0 = os.path.join(self.state, f"phase0{sfx}.json")
+        self.graded = os.path.join(self.state, f"graded{sfx}.jsonl")
+        self.analysis = os.path.join(self.state, f"analysis{sfx}.json")
         self.calibration = os.path.join(self.state, "calibration.json")
-        self.results_md = os.path.join(self.root, "RESULTS.md")
+        self.results_md = os.path.join(self.root,
+                                       "RESULTS.md" if suite == "v1" else f"RESULTS-{suite}.md")
 
     def ensure(self) -> None:
         for d in (self.state, self.raw, self.answers):
@@ -258,6 +292,43 @@ def load_json(path: str):
 # --------------------------------------------------------------------------- #
 # Task loading, matrix, seeded shuffle                                         #
 # --------------------------------------------------------------------------- #
+def estimate_tokens(text: str) -> int:
+    """Stdlib token estimate: ~4 chars/token, floored at the word count.
+
+    No real tokenizer is available (stdlib-only), so document input accounting uses
+    this deterministic heuristic. Real runs still bill from the CLI envelope; this
+    only sizes prepended context and shapes mock input tokens.
+    """
+    if not text:
+        return 0
+    return max(len(text.split()), -(-len(text) // CHARS_PER_TOKEN))
+
+
+DOC_BLOCK_HEADER = "=== BEGIN PROVIDED DOCUMENT {n}: {title} ==="
+DOC_BLOCK_FOOTER = "=== END PROVIDED DOCUMENT {n} ==="
+
+
+def build_documents_block(documents) -> tuple[str, int]:
+    """Render documents[] as clearly-delimited context blocks + estimated tokens.
+
+    Returns (block_text, estimated_tokens). Missing/empty -> ("", 0). The blocks are
+    prepended to the task prompt (04 suite v2); their tokens are counted in input
+    accounting so a research task's long context is not billed as free.
+    """
+    if not documents:
+        return "", 0
+    parts = []
+    for i, doc in enumerate(documents, 1):
+        title = str(doc.get("title", f"document {i}"))
+        content = str(doc.get("content", ""))
+        parts.append(DOC_BLOCK_HEADER.format(n=i, title=title))
+        parts.append(content)
+        parts.append(DOC_BLOCK_FOOTER.format(n=i))
+        parts.append("")
+    block = "\n".join(parts)
+    return block, estimate_tokens(block)
+
+
 def load_tasks(tasks_dir: str) -> list[dict]:
     files = sorted(glob.glob(os.path.join(tasks_dir, "*.json")))
     if not files:
@@ -265,7 +336,15 @@ def load_tasks(tasks_dir: str) -> list[dict]:
     tasks = []
     for f in files:
         t = load_json(f)
-        t["prompt_text"] = "\n".join(t["prompt"])
+        # prompt is an array of lines (v1) OR a plain string (v2 tolerance).
+        prompt = t["prompt"]
+        base = "\n".join(prompt) if isinstance(prompt, list) else str(prompt)
+        # v2: documents[] are prepended as clearly-delimited context blocks and their
+        # tokens counted in input accounting. v1 tasks carry no documents -> base as-is
+        # (byte-identical prompt_text and document_tokens == 0).
+        block, doc_tokens = build_documents_block(t.get("documents"))
+        t["prompt_text"] = (block + "\n" + base) if block else base
+        t["document_tokens"] = doc_tokens
         tasks.append(t)
     return tasks
 
@@ -562,6 +641,190 @@ def grade_record(task: dict, raw: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Blind LLM grader (checker.type == "blind-grader"), suite v2                   #
+# Implements the effort-grader contract (agents/effort-grader.md): the payload  #
+# names ONLY the task, rubric, and artifact -- there is no field for the tier,  #
+# agent, effort, model, or rep that produced it, so the grade cannot be biased  #
+# by effort level (blindness by payload shape). Skeptic-first, round-down.      #
+# --------------------------------------------------------------------------- #
+GRADER_INSTRUCTIONS = (
+    "You are the independent, blind grader for effortmining. Decide whether the "
+    "artifact meets the task's rubric, while structurally blind to how much "
+    "reasoning produced it: the payload names only the task, the rubric, and the "
+    "artifact. If you catch yourself guessing what produced the artifact, stop -- "
+    "that guess is not evidence and must not touch the grade.\n\n"
+    "Stance. Skeptic first: for each rubric criterion, name what is missing or wrong "
+    "before crediting anything. Judge meaning, not wording. A criterion that asks for "
+    "a justification is not met by a bare result. A confidently-stated wrong answer is "
+    "still a miss. An empty or 'I don't know' answer is a miss. When torn between two "
+    "verdicts, round down.\n\n"
+    "Output STRICT JSON ONLY -- no prose before or after, no markdown fence, exactly "
+    "one object with this shape:\n"
+    "{'criteria': [{'id': '<criterion label>', 'met': true, "
+    "'evidence': '<short quote or reason>'}], "
+    "'score': <number in 0..1, the fraction of the rubric the artifact satisfies>, "
+    "'pass': <true or false>}\n"
+    "Use double quotes for JSON. Emit nothing except that one object."
+)
+
+
+def _norm_threshold(checker: dict) -> float:
+    """Normalize pass_threshold onto the [0,1] score scale the grader reports on."""
+    thr = float(checker.get("pass_threshold", 0.5))
+    mx = float(checker.get("max_score", 1.0) or 1.0)
+    return (thr / mx) if mx else thr
+
+
+def build_grader_payload(task_prompt: str, rubric: str, artifact: str) -> dict:
+    """The blind-grader payload: EXACTLY three keys, enforced by shape.
+
+    There is deliberately no tier/agent/effort/rep/model/cost key here, and there
+    never will be -- blindness is a property of the payload's structure, not of an
+    instruction the grader could ignore. Do not add fields to this dict.
+    """
+    return {"task_prompt": task_prompt, "rubric": rubric, "artifact": artifact}
+
+
+def build_grader_prompt(payload: dict) -> str:
+    """Fixed grader template + the three-key payload rendered as a JSON block."""
+    return (GRADER_INSTRUCTIONS
+            + "\n\nGRADE THIS PAYLOAD:\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def _extract_first_json_object(text: str):
+    """Extract and parse the first balanced {...} JSON object in text, else None.
+
+    Defensive: the grader is instructed to emit strict JSON, but real models wrap it
+    in stray prose or a fence. We scan for the first brace, track string/escape state
+    so braces inside strings do not fool the balance, and json.loads the slice.
+    """
+    if not text:
+        return None
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    return None
+
+
+def invoke_grader(prompt: str, model: str, env: dict, timeout_s: int) -> tuple:
+    """Call the blind grader (claude -p --effort medium). Parse defensively; a parse
+    failure is retried once, then flagged. Returns (verdict|None, meta).
+
+    meta always carries grading_* token/cost fields so the grader's spend is recorded
+    separately and never pollutes the measured run's cost.
+    """
+    attempts = 0
+    tin = tout = 0
+    cost = 0.0
+    while True:
+        res = invoke_claude(prompt, GRADER_EFFORT, model, timeout_s, env)
+        env_json = None
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                env_json = json.loads(res.stdout)
+            except json.JSONDecodeError:
+                env_json = None
+        if isinstance(env_json, dict):
+            usage = env_json.get("usage", {}) or {}
+            tin += int(usage.get("input_tokens", 0) or 0)
+            tout += int(usage.get("output_tokens", 0) or 0)
+            c = env_json.get("total_cost_usd")
+            cost += float(c) if c is not None else 0.0
+            verdict = _extract_first_json_object(env_json.get("result", ""))
+            if verdict is not None:
+                return verdict, {"grading_source": "grader",
+                                 "grading_input_tokens": tin, "grading_output_tokens": tout,
+                                 "grading_cost_usd": round(cost, 6), "grading_retries": attempts}
+        if attempts < GRADER_RETRIES:
+            attempts += 1
+            time.sleep(min(BACKOFF_CAP, BACKOFF_BASE) * (0.5 + random.random()))
+            continue
+        return None, {"grading_source": "grader", "grading_input_tokens": tin,
+                      "grading_output_tokens": tout, "grading_cost_usd": round(cost, 6),
+                      "grading_retries": attempts, "grading_error": True}
+
+
+def mock_grader_verdict(artifact: str, checker: dict) -> tuple:
+    """Deterministic offline grader (--grade-mock): verdict keyed by artifact hash.
+
+    No model call. Same artifact -> same verdict, always (so the smoke test's two
+    passes agree). Score is a stable hash in [0,1]; pass follows the threshold.
+    """
+    h = hashlib.sha256((artifact or "").encode("utf-8")).hexdigest()
+    score = int(h[:8], 16) / float(0xFFFFFFFF)
+    thr = _norm_threshold(checker)
+    verdict = {"criteria": [{"id": "mock", "met": bool(score >= thr),
+                             "evidence": "grade-mock deterministic hash verdict"}],
+               "score": round(score, 4), "pass": bool(score >= thr)}
+    meta = {"grading_source": "grade-mock", "grading_input_tokens": 0,
+            "grading_output_tokens": 0, "grading_cost_usd": 0.0, "grading_retries": 0}
+    return verdict, meta
+
+
+def grade_blind(task: dict, raw: str, *, grade_mock: bool, model: str,
+                env: dict | None = None, timeout_s: int = GRADER_TIMEOUT_S) -> dict:
+    """Grade a blind-grader cell -> a grade dict mergeable into the run record.
+
+    A grader parse failure after one retry is `grading_error`, NOT a task fail:
+    pass=None so analyze excludes it from quality (a broken grader must never be
+    read as a produced-then-failed artifact). Grader tokens/cost land under
+    grading_* keys, isolated from the measured run cost.
+    """
+    checker = task["checker"]
+    rubric = checker.get("rubric", "")
+    payload = build_grader_payload(task.get("prompt_text", ""), rubric, raw or "")
+    prompt = build_grader_prompt(payload)
+    if grade_mock:
+        verdict, meta = mock_grader_verdict(raw or "", checker)
+    else:
+        verdict, meta = invoke_grader(prompt, model, env or {}, timeout_s)
+    grading = {"grading_source": meta.get("grading_source", "grader"),
+               "grading_input_tokens": meta.get("grading_input_tokens", 0),
+               "grading_output_tokens": meta.get("grading_output_tokens", 0),
+               "grading_cost_usd": meta.get("grading_cost_usd", 0.0),
+               "grading_retries": meta.get("grading_retries", 0)}
+    if verdict is None:
+        return {"pass": None, "checker_type": "blind-grader",
+                "failure_class": "grading_error",
+                "checker_detail": "grader output unparseable after retry",
+                "grading_error": True, **grading}
+    thr = _norm_threshold(checker)
+    try:
+        score = float(verdict.get("score"))
+    except (TypeError, ValueError):
+        score = None
+    passed = bool(score >= thr) if score is not None else bool(verdict.get("pass"))
+    return {"pass": passed, "checker_type": "blind-grader",
+            "failure_class": "none" if passed else "blind_fail",
+            "checker_detail": f"score={score} thr={thr:.3f} pass={passed}",
+            "grader_verdict": {"score": score, "pass": bool(verdict.get("pass")),
+                               "n_criteria": len(verdict.get("criteria", []) or [])},
+            **grading}
+
+
+# --------------------------------------------------------------------------- #
 # claude invocation (real) and mock envelope fabrication                       #
 # --------------------------------------------------------------------------- #
 def detect_cli_version() -> str:
@@ -763,6 +1026,14 @@ def mock_answer(task: dict, passed: bool) -> str:
         else:
             inner = "WRONG_ANSWER_PLACEHOLDER"
         return f"Here is the result.\n<answer>\n{inner}\n</answer>\n"
+    if ck["type"] == "blind-grader":
+        # Non-deterministic (R-research) artifact: a fuller answer when "passed",
+        # a thin one otherwise. --grade-mock re-derives the verdict from the text.
+        body = ("A complete, well-structured response that addresses every rubric "
+                "point with supporting detail drawn from the provided documents."
+                if passed else
+                "A brief, partial response that leaves several rubric points unaddressed.")
+        return f"<response>\n{body}\n</response>\n"
     entry = ck["entrypoint"]
     if passed and entry in _MOCK_SOLUTIONS:
         code = _MOCK_SOLUTIONS[entry]
@@ -778,6 +1049,8 @@ def mock_envelope(task: dict, tier: str, rep: int, seed: int) -> dict:
     jitter = 0.85 + 0.30 * _h01(seed, "tok", task["id"], tier, rep)
     out_tok = int(MOCK_BASE_OUT[tier] * jitter)
     in_tok = int(2600 * (0.9 + 0.2 * _h01(seed, "in", task["id"], tier, rep)))
+    # v2: prepended documents add to input tokens (0 for v1 tasks -> unchanged).
+    in_tok += int(task.get("document_tokens", 0) or 0)
     cache_read = int(in_tok * 0.72)
     cost = in_tok * PRICE_IN + out_tok * PRICE_OUT
     dur = int(500 + out_tok * 8 * (0.8 + 0.4 * _h01(seed, "dur", task["id"], tier, rep)))
@@ -806,7 +1079,7 @@ def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str
                        seed: int, nonce: str, model: str, cli_version: str,
                        ts_start: str, exit_status: int, retries: int,
                        raw_answer_path: str, effort_effective: str,
-                       effort_effective_source: str) -> dict:
+                       effort_effective_source: str, document_tokens: int = 0) -> dict:
     # Field names are bound verbatim to the R1-confirmed envelope (04 Section 9.3):
     # input_tokens/output_tokens/cache_*/total_cost_usd/model_usage/session_id.
     usage = env.get("usage", {}) if isinstance(env, dict) else {}
@@ -815,7 +1088,7 @@ def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str
     cost = env.get("total_cost_usd")
     if cost is None:
         cost = tin * PRICE_IN + tout * PRICE_OUT
-    return {
+    rec = {
         "run_id": run_id_of(task["id"], tier, rep),
         "task_id": task["id"], "class": task["class"],
         "tier": tier, "effort_requested": tier,
@@ -838,6 +1111,11 @@ def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str
         "raw_answer_path": raw_answer_path,
         "exit_status": exit_status, "api_error": False, "retries": retries,
     }
+    # v2 only: prepended-document token count. Absent for v1 so records stay
+    # byte-for-byte identical when no documents are present.
+    if document_tokens:
+        rec["document_tokens"] = int(document_tokens)
+    return rec
 
 
 def error_record(task: dict, tier: str, rep: int, *, scale: str, seed: int,
@@ -897,6 +1175,7 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
     nonce = uuid.uuid4().hex
     prompt = f"[run-id: {nonce}]\n\n" + task["prompt_text"]
     ts_start = _now()
+    doc_tokens = int(task.get("document_tokens", 0) or 0)
     rel_answer = os.path.join("raw", "answers", run_id_of(task["id"], tier, rep) + ".txt")
 
     if mock:
@@ -908,7 +1187,7 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
                                   nonce=nonce, model=model, cli_version=cli_version,
                                   ts_start=ts_start, exit_status=0, retries=0,
                                   raw_answer_path=rel_answer, effort_effective=tier,
-                                  effort_effective_source="mock")
+                                  effort_effective_source="mock", document_tokens=doc_tokens)
 
     retries = 0
     fidelity_retries = 0
@@ -948,7 +1227,8 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
                                       retries=retries + fidelity_retries,
                                       raw_answer_path=rel_answer,
                                       effort_effective=effective,
-                                      effort_effective_source=source)
+                                      effort_effective_source=source,
+                                      document_tokens=doc_tokens)
         # failure: decide transient vs permanent (review L9: transient signatures
         # are trusted from stderr / a parsed error field only, never from stdout).
         last_detail = ((res.stderr or "") + " " + (res.stdout or "")[:200]).strip()
@@ -966,9 +1246,14 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
 
 
 def cmd_run(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    paths = Paths(args.root, args.tasks_dir, suite)
     paths.ensure()
     tasks = load_tasks(paths.tasks)
+    if suite == "v2":
+        # X-composite tasks are executed by run-composite (multi-subtask, policy
+        # arms), never as flat matrix cells.
+        tasks = [t for t in tasks if t.get("class") != COMPOSITE_CLASS]
     cells = build_cells(tasks, args.scale)
     cells = seeded_shuffle(cells, args.seed)
 
@@ -1060,10 +1345,237 @@ def cmd_run(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Subcommand: run-composite (X-composite multi-subtask jobs under policy arms) #
+# --------------------------------------------------------------------------- #
+def parse_arms(arg) -> list:
+    """Parse a --arms CSV into a validated arm list (default = all three arms)."""
+    if not arg:
+        return list(COMPOSITE_ARMS)
+    arms = [a.strip() for a in str(arg).split(",") if a.strip()]
+    for a in arms:
+        if a not in COMPOSITE_ARMS:
+            raise SystemExit(f"unknown arm {a!r}; choose from {list(COMPOSITE_ARMS)}")
+    return arms
+
+
+def load_calibration_classes(path: str) -> dict:
+    """Read the class->tier table from calibration.json, else {} (all fall back)."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        return load_json(path).get("classes", {}) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def resolve_arm_tier(arm: str, subtask_class: str, calib_classes: dict) -> str:
+    """Tier a subtask runs at under its arm's policy.
+
+      inherit_xhigh -> xhigh for every subtask (status-quo "just inherit" arm)
+      uniform_high  -> high for every subtask (the model-default arm)
+      calibrated    -> calibration.json recommended_tier for the subtask's class,
+                       falling back to 'high' for a class not yet in the table
+                       (R-research / C-coding until `calibrate --suite v2` fits them).
+    """
+    if arm in ARM_FIXED_TIER:
+        return ARM_FIXED_TIER[arm]
+    if arm == "calibrated":
+        tier = (calib_classes.get(subtask_class) or {}).get("recommended_tier")
+        return tier if tier in TIERS else COMPOSITE_FALLBACK_TIER
+    raise SystemExit(f"unknown composite arm {arm!r}; choose from {list(COMPOSITE_ARMS)}")
+
+
+def composite_cell_key(composite_id, arm, rep, subtask_id) -> tuple:
+    return (composite_id, arm, int(rep), subtask_id)
+
+
+def composite_run_id(composite_id, arm, subtask_id, tier, rep) -> str:
+    return f"{composite_id}__{arm}__{subtask_id}__{tier}__r{rep}"
+
+
+def latest_by_composite_key(records: list) -> dict:
+    """Collapse composite records to one per (composite,arm,rep,subtask): the last
+    non-error record if any, else the last. Mirrors latest_by_key for resumability."""
+    best: dict = {}
+    for r in records:
+        key = composite_cell_key(r.get("composite_id"), r.get("arm"),
+                                 r.get("rep"), r.get("subtask_id"))
+        cur = best.get(key)
+        if cur is None:
+            best[key] = r
+        elif cur.get("api_error") and not r.get("api_error"):
+            best[key] = r
+        elif cur.get("api_error") == r.get("api_error"):
+            best[key] = r
+    return best
+
+
+def subtask_prompt_text(subtask: dict) -> str:
+    p = subtask.get("prompt", "")
+    return "\n".join(p) if isinstance(p, list) else str(p)
+
+
+def execute_composite_subtask(*, composite_id, subtask, arm, tier, rep, mock, seed,
+                              model, cli_version, env, paths, settings_path, sidecar) -> dict:
+    """Run one subtask of one X-task under one arm/rep, then grade it inline with its
+    own deterministic checker. Returns one record (v1 schema + composite fields)."""
+    sub_task = {"id": subtask["id"], "class": subtask.get("class", COMPOSITE_CLASS),
+                "checker": subtask["checker"], "prompt_text": subtask_prompt_text(subtask)}
+    nonce = uuid.uuid4().hex
+    prompt = f"[run-id: {nonce}]\n\n" + sub_task["prompt_text"]
+    ts_start = _now()
+    rid = composite_run_id(composite_id, arm, subtask["id"], tier, rep)
+    rel_answer = os.path.join("raw", "answers", rid + ".txt")
+
+    if mock:
+        env_json = mock_envelope(sub_task, tier, rep, seed)
+        answer = env_json["result"]
+        atomic_write_text(os.path.join(paths.root, rel_answer), answer)
+        rec = envelope_to_record(env_json, sub_task, tier, rep, scale="composite",
+                                 seed=seed, nonce=nonce, model=model, cli_version=cli_version,
+                                 ts_start=ts_start, exit_status=0, retries=0,
+                                 raw_answer_path=rel_answer, effort_effective=tier,
+                                 effort_effective_source="mock")
+        g = grade_record(sub_task, answer)
+    else:
+        retries = 0
+        while True:
+            res = invoke_claude(prompt, tier, model, RUN_TIMEOUT_S, env, settings_path)
+            env_json = None
+            if res.returncode == 0 and res.stdout.strip():
+                try:
+                    env_json = json.loads(res.stdout)
+                except json.JSONDecodeError:
+                    env_json = None
+            if env_json is not None and not env_json.get("is_error", False):
+                session_id = env_json.get("session_id", "")
+                eff = effective_from_sidecar(sidecar, session_id) if sidecar else None
+                if eff is None:
+                    eff = detect_effective_effort(env_json)
+                effective, source = (eff, "hook") if eff else ("unverified", "unverified")
+                answer = env_json.get("result", "")
+                atomic_write_text(os.path.join(paths.root, rel_answer), answer)
+                rec = envelope_to_record(env_json, sub_task, tier, rep, scale="composite",
+                                         seed=seed, nonce=nonce, model=model,
+                                         cli_version=cli_version, ts_start=ts_start,
+                                         exit_status=res.returncode, retries=retries,
+                                         raw_answer_path=rel_answer, effort_effective=effective,
+                                         effort_effective_source=source)
+                g = grade_record(sub_task, answer)
+                break
+            detail = ((res.stderr or "") + " " + (res.stdout or "")[:200]).strip()
+            if _is_transient_failure(res, env_json) and retries < MAX_RETRIES:
+                retries += 1
+                time.sleep(min(BACKOFF_CAP, BACKOFF_BASE * (2 ** (retries - 1))) * (0.5 + random.random()))
+                continue
+            rec = error_record(sub_task, tier, rep, scale="composite", seed=seed, nonce=nonce,
+                               model=model, cli_version=cli_version, ts_start=ts_start,
+                               exit_status=res.returncode, retries=retries,
+                               detail=detail or "unknown failure")
+            g = {"pass": False, "checker_type": subtask["checker"]["type"],
+                 "failure_class": "api_error", "checker_detail": "run failed"}
+            break
+
+    rec.update({"run_id": rid, "composite_id": composite_id, "arm": arm,
+                "subtask_id": subtask["id"], **g})
+    return rec
+
+
+def cmd_run_composite(args) -> int:
+    suite = getattr(args, "suite", "v2")
+    paths = Paths(args.root, args.tasks_dir, suite)
+    paths.ensure()
+    tasks = load_tasks(paths.tasks)
+    x_tasks = [t for t in tasks if t.get("class") == COMPOSITE_CLASS]
+    if not x_tasks:
+        print(f"[run-composite] no {COMPOSITE_CLASS} tasks in {paths.tasks}; nothing to do.")
+        return 0
+    arms = parse_arms(getattr(args, "arms", None))
+    reps = int(getattr(args, "reps", 3))
+    seed = int(getattr(args, "seed", SEED_DEFAULT))
+    mock = bool(getattr(args, "mock", False))
+    model = getattr(args, "model", MODEL)
+
+    # Phase 0 (v2) hard gate for real runs, mirroring cmd_run.
+    if not mock:
+        gate_ok = False
+        if os.path.exists(paths.phase0):
+            try:
+                gate_ok = bool(load_json(paths.phase0).get("gate_passed"))
+            except (OSError, json.JSONDecodeError):
+                gate_ok = False
+        if not gate_ok and not getattr(args, "force", False):
+            print("[run-composite] BLOCKED: Phase 0 (v2) gate not passed. Run "
+                  "`effort.py validate --suite v2` first, or pass --force.")
+            return 2
+        if not gate_ok:
+            print("[run-composite] WARNING: Phase 0 gate not passed — proceeding (--force).")
+
+    calib_classes = load_calibration_classes(paths.calibration)
+    prior, bad = read_jsonl(paths.results_composite)
+    if bad:
+        print(f"[run-composite] quarantined {bad} corrupt line(s)")
+    completed = {k for k, r in latest_by_composite_key(prior).items() if not r.get("api_error")}
+
+    # Unit of parallelism = one (X-task, arm, rep) triple; its subtasks run in ORDER
+    # (they may be order-dependent in prose), each an independent claude -p call.
+    triples = [(xt, arm, rep) for xt in x_tasks for arm in arms
+               for rep in range(1, reps + 1)]
+    to_run = sum(1 for xt, arm, rep in triples for sub in xt.get("subtasks", [])
+                 if composite_cell_key(xt["id"], arm, rep, sub["id"]) not in completed)
+    total_cells = sum(len(xt.get("subtasks", [])) for xt in x_tasks) * len(arms) * reps
+    print(f"[run-composite] suite={suite} arms={','.join(arms)} reps={reps} mock={mock} "
+          f"x_tasks={len(x_tasks)}")
+    print(f"[run-composite] matrix={total_cells} completed={len(completed)} to_run={to_run}")
+    if to_run == 0:
+        print("[run-composite] nothing to do; already complete.")
+        return 0
+
+    env = {}
+    settings_path = sidecar = None
+    cli_version = "mock" if mock else detect_cli_version()
+    if not mock:
+        env = build_child_env()[0]
+        settings_path, sidecar = setup_effort_capture(os.path.join(paths.state, "capture"))
+        print(f"[run-composite] effort-capture hook installed "
+              f"({os.path.relpath(sidecar, paths.root)})")
+
+    def run_triple(triple):
+        xt, arm, rep = triple
+        out = []
+        for sub in xt.get("subtasks", []):
+            key = composite_cell_key(xt["id"], arm, rep, sub["id"])
+            if key in completed:
+                continue
+            tier = resolve_arm_tier(arm, sub.get("class", COMPOSITE_CLASS), calib_classes)
+            rec = execute_composite_subtask(
+                composite_id=xt["id"], subtask=sub, arm=arm, tier=tier, rep=rep,
+                mock=mock, seed=seed, model=model, cli_version=cli_version, env=env,
+                paths=paths, settings_path=settings_path, sidecar=sidecar)
+            append_jsonl(paths.results_composite, rec)
+            out.append(rec)
+        return out
+
+    done = 0
+    workers = 1 if mock else max(1, int(getattr(args, "parallel", 3)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(run_triple, t): t for t in triples}
+        for fut in concurrent.futures.as_completed(futs):
+            done += len(fut.result())
+            if done and (done % 10 == 0 or done >= to_run):
+                print(f"[run-composite] {min(done, to_run)}/{to_run} subtask runs appended")
+    print(f"[run-composite] complete: {done} subtask runs -> "
+          f"{os.path.relpath(paths.results_composite, paths.root)}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Subcommand: grade                                                           #
 # --------------------------------------------------------------------------- #
 def cmd_grade(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    grade_mock = getattr(args, "grade_mock", False)
+    paths = Paths(args.root, args.tasks_dir, suite)
     paths.ensure()
     tasks = {t["id"]: t for t in load_tasks(paths.tasks)}
     results, bad = read_jsonl(paths.results)
@@ -1074,9 +1586,14 @@ def cmd_grade(args) -> int:
     prior_graded, _ = read_jsonl(paths.graded)
     prior_by_key = latest_by_key(prior_graded) if prior_graded else {}
 
+    # Blind grading (v2) shells out to `claude`; build the sanitized child env once.
+    # v1 never blind-grades and --grade-mock never touches the network.
+    grade_env = build_child_env()[0] if (suite == "v2" and not grade_mock) else {}
+
     graded_out = []
-    n_pass = n_fail = n_reused = n_new = excluded_fidelity = 0
-    tax = {"none": 0, "wrong_answer": 0, "parse_fail": 0, "timeout": 0, "api_error": 0}
+    n_pass = n_fail = n_reused = n_new = excluded_fidelity = n_grading_error = 0
+    tax = {"none": 0, "wrong_answer": 0, "parse_fail": 0, "timeout": 0, "api_error": 0,
+           "blind_fail": 0, "grading_error": 0}
     for key, rec in latest.items():
         if rec.get("api_error"):
             tax["api_error"] += 1
@@ -1090,8 +1607,11 @@ def cmd_grade(args) -> int:
         if task is None:
             continue
         prev = prior_by_key.get(key)
-        if (not args.regrade and prev is not None and prev.get("nonce") == rec.get("nonce")
-                and "pass" in prev):
+        # Reuse a prior grade only if it reached a real verdict (True/False). A prior
+        # grading_error (pass=None) is re-graded so a flaked grader gets another shot.
+        if (not getattr(args, "regrade", False) and prev is not None
+                and prev.get("nonce") == rec.get("nonce")
+                and isinstance(prev.get("pass"), bool)):
             merged = dict(prev)
             n_reused += 1
         else:
@@ -1109,21 +1629,30 @@ def cmd_grade(args) -> int:
                 tax["parse_fail"] += 1
                 n_fail += 1
                 continue
-            g = grade_record(task, raw)
+            if task["checker"]["type"] == "blind-grader":
+                g = grade_blind(task, raw, grade_mock=grade_mock,
+                                model=getattr(args, "model", MODEL), env=grade_env)
+            else:
+                g = grade_record(task, raw)
             merged = {**rec, **g}
             n_new += 1
         graded_out.append(merged)
         tax[merged["failure_class"]] = tax.get(merged["failure_class"], 0) + 1
-        if merged["pass"]:
+        if merged.get("pass") is True:
             n_pass += 1
-        else:
+        elif merged.get("pass") is False:
             n_fail += 1
+        else:
+            # grading_error: grader unparseable after retry -> excluded from quality,
+            # never counted as a task fail (04 suite v2 blind-grader taxonomy).
+            n_grading_error += 1
 
     # graded.jsonl is a derived, full-rewrite file (results.jsonl remains the
     # append-only source of truth). Atomic whole-file write.
     body = "".join(json.dumps(r) + "\n" for r in graded_out)
     atomic_write_text(paths.graded, body)
-    print(f"[grade] graded {len(graded_out)} cells: {n_pass} pass, {n_fail} fail "
+    ge = f", {n_grading_error} grading_error" if n_grading_error else ""
+    print(f"[grade] graded {len(graded_out)} cells: {n_pass} pass, {n_fail} fail{ge} "
           f"({n_new} new, {n_reused} reused; {excluded_fidelity} excluded: fidelity)")
     print(f"[grade] taxonomy: {tax}")
     print(f"[grade] wrote {os.path.relpath(paths.graded, paths.root)}")
@@ -1144,6 +1673,23 @@ def _step_toward(cur: str, target: str) -> str:
     ni = ci + (1 if ti > ci else -1)
     ni = max(0, min(len(TIERS) - 1, ni))
     return TIERS[ni]
+
+
+def guarded_move(cur_tier: str, candidate: str, n_cur: int, n_cand: int) -> tuple:
+    """Guarded refit decision (04 Section 7.2): move at most one tier toward the
+    candidate, and only if BOTH the current and candidate cells clear the min-N gate.
+
+    Returns (proposed_tier, reason, moved_bool). Shared by v1 and v2 calibrate so the
+    gate/step/clamp rule cannot drift between suites.
+    """
+    if cur_tier == candidate:
+        return cur_tier, "no-change (candidate == current)", False
+    if not (n_cur >= MIN_N_REFIT and n_cand >= MIN_N_REFIT):
+        return cur_tier, f"gated (n_cur={n_cur}, n_cand={n_cand} < {MIN_N_REFIT})", False
+    proposed = _step_toward(cur_tier, candidate)  # single-step, clamped
+    reason = ("moved one step toward candidate"
+              + ("" if proposed == candidate else f" (candidate {candidate} is >1 step away)"))
+    return proposed, reason, True
 
 
 def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
@@ -1526,13 +2072,189 @@ def build_calibration(analysis: dict, tasks: dict, runs: int | None = None) -> d
     return out
 
 
+def analyze_composite(x_tasks: list, composite_graded: list, seed: int = SEED_DEFAULT) -> dict:
+    """Composite arm analysis (04 suite v2). Per X-task and pooled:
+      - summed output tokens per arm (mean over reps, bootstrap 95% CI)
+      - aggregate subtask pass rate per arm (pooled over subtasks x reps)
+      - pre-registered verdict: `calibrated` wins iff its summed tokens are below BOTH
+        baselines with a bootstrap CI of the saving excluding 0, AND its aggregate
+        subtask pass is non-inferior to both baselines at delta_agg (Newcombe).
+
+    Pure function of its inputs; seeded so the bootstrap is reproducible.
+    """
+    # Gradeable subtask runs only: non-error with a real bool verdict.
+    valid = [g for g in composite_graded
+             if not g.get("api_error") and isinstance(g.get("pass"), bool)]
+    # An arm is "present" only if it has at least one gradeable run (an arm whose runs
+    # all errored contributes no comparable tokens/quality and must not skew a verdict).
+    arms_present = [a for a in COMPOSITE_ARMS if any(g.get("arm") == a for g in valid)]
+
+    # Per (x-task, arm, rep) summed output tokens over its subtasks.
+    triple_out: dict = {}
+    for g in valid:
+        k = (g["composite_id"], g["arm"], g["rep"])
+        triple_out[k] = triple_out.get(k, 0) + int(g.get("output_tokens", 0))
+    x_ids = sorted({xt["id"] for xt in x_tasks} | {g["composite_id"] for g in valid})
+
+    # Bootstrap cells: (x-task, arm) -> list of per-rep summed-out totals.
+    out_cells: dict = {}
+    for (xid, arm, rep), tot in triple_out.items():
+        out_cells.setdefault((xid, arm), []).append(tot)
+    for v in out_cells.values():
+        v.sort()
+
+    def arm_total(cells, arm):
+        # Sum over x-tasks of the mean per-rep summed-out for that arm.
+        return sum((sum(vals) / len(vals)) for xid in x_ids
+                   for vals in [cells.get((xid, arm))] if vals)
+
+    # Per-arm aggregate pass, pooled over subtask runs.
+    arm_k = {a: 0 for a in COMPOSITE_ARMS}
+    arm_n = {a: 0 for a in COMPOSITE_ARMS}
+    for g in valid:
+        a = g["arm"]
+        arm_n[a] = arm_n.get(a, 0) + 1
+        arm_k[a] = arm_k.get(a, 0) + (1 if g["pass"] else 0)
+
+    pooled = {}
+    for a in arms_present:
+        pooled[a] = {"out_tokens": arm_total(out_cells, a),
+                     "agg_pass": (arm_k[a] / arm_n[a]) if arm_n[a] else None,
+                     "k": arm_k[a], "n": arm_n[a]}
+
+    # Per-task table (mean summed-out with a per-task bootstrap CI, plus agg pass).
+    per_task = {}
+    for xid in x_ids:
+        per_task[xid] = {}
+        for a in arms_present:
+            vals = out_cells.get((xid, a), [])
+            k = sum(1 for g in valid
+                    if g["composite_id"] == xid and g["arm"] == a and g["pass"])
+            n = sum(1 for g in valid if g["composite_id"] == xid and g["arm"] == a)
+            if vals:
+                bc = bootstrap_ci({(xid, a): vals},
+                                  (lambda aa: (lambda c: arm_total(c, aa)))(a), seed=seed)
+                mean_out, ci = sum(vals) / len(vals), [bc[1], bc[2]]
+            else:
+                mean_out, ci = None, [None, None]
+            per_task[xid][a] = {"mean_out": mean_out, "out_ci": ci, "n_reps": len(vals),
+                                "agg_pass": (k / n) if n else None, "k": k, "n": n}
+
+    # Savings vs each baseline + bootstrap CI (calibrated cheaper => saving > 0), and
+    # aggregate-pass non-inferiority of calibrated vs each baseline.
+    def savings_stat(baseline):
+        return lambda cells: arm_total(cells, baseline) - arm_total(cells, "calibrated")
+
+    savings, noninf = {}, {}
+    have_cal = "calibrated" in arms_present
+    for baseline in ("inherit_xhigh", "uniform_high"):
+        if have_cal and baseline in arms_present:
+            sc = bootstrap_ci(out_cells, savings_stat(baseline), seed=seed)
+            savings[baseline] = {"point": sc[0], "ci95": [sc[1], sc[2]]}
+            noninf[baseline] = noninferiority(arm_k["calibrated"], arm_n["calibrated"],
+                                              arm_k[baseline], arm_n[baseline], delta=DELTA_AGG)
+        else:
+            savings[baseline] = {"point": None, "ci95": [None, None]}
+            noninf[baseline] = None
+
+    def cheaper(baseline):
+        s = savings.get(baseline, {})
+        lo = s.get("ci95", [None, None])[0]
+        return bool(s.get("point") is not None and s["point"] > 0 and lo is not None and lo > 0)
+
+    def passes_ni(baseline):
+        ni = noninf.get(baseline)
+        return bool(ni and ni.get("noninferior"))
+
+    if have_cal and {"inherit_xhigh", "uniform_high"} <= set(arms_present):
+        verdict = {
+            "calibrated_wins": bool(cheaper("inherit_xhigh") and cheaper("uniform_high")
+                                    and passes_ni("inherit_xhigh") and passes_ni("uniform_high")),
+            "cheaper_than_inherit_xhigh": cheaper("inherit_xhigh"),
+            "cheaper_than_uniform_high": cheaper("uniform_high"),
+            "noninferior_inherit_xhigh": passes_ni("inherit_xhigh"),
+            "noninferior_uniform_high": passes_ni("uniform_high"),
+        }
+    else:
+        verdict = {"calibrated_wins": None,
+                   "reason": "incomplete arms (need calibrated + both baselines)"}
+
+    return {"arms_present": arms_present, "pooled": pooled, "per_task": per_task,
+            "savings": savings, "noninferiority": noninf, "verdict": verdict,
+            "delta_agg": DELTA_AGG, "n_valid_subtask_runs": len(valid),
+            "x_task_ids": x_ids}
+
+
+def _analyze_v2(args, paths, tasks, graded_bool) -> int:
+    """Suite-v2 analyze: R/C classes via the existing per-class machinery, plus the
+    composite arm analysis. Writes analysis-v2.json only — the shared calibration.json
+    is updated by `calibrate --suite v2` (composite arms consume it, never feed it)."""
+    seed = int(getattr(args, "seed", SEED_DEFAULT))
+    core_tasks = {tid: t for tid, t in tasks.items() if t.get("class") != COMPOSITE_CLASS}
+    # Only records for known R/C tasks feed the per-class machinery (defensive: a
+    # composite subtask never lands in graded-v2, but this guards analyze_core's
+    # tasks[task_id] lookup against any stray id).
+    graded_bool = [g for g in graded_bool if g.get("task_id") in core_tasks]
+    graded_latest = list(latest_by_key(graded_bool).values()) if graded_bool else []
+    if graded_latest:
+        seed = graded_latest[0].get("seed", seed)
+        core = analyze_core(core_tasks, graded_latest, seed)
+    else:
+        core = {"manifest": {"generated_at": _now(), "model": [], "cli_version": [],
+                             "seed": [], "scale": [], "classes": [], "tiers_present": [],
+                             "n_graded": 0, "note": "no R/C graded records yet"},
+                "per_cell": {}, "per_class": {}, "policies": {}, "policy_comparison": {}}
+
+    comp_records, cbad = read_jsonl(paths.results_composite)
+    if cbad:
+        print(f"[analyze] quarantined {cbad} corrupt composite line(s)")
+    x_tasks = [t for t in tasks.values() if t.get("class") == COMPOSITE_CLASS]
+    comp_latest = list(latest_by_composite_key(comp_records).values()) if comp_records else []
+    composite = (analyze_composite(x_tasks, comp_latest, seed=seed)
+                 if (x_tasks or comp_latest) else None)
+
+    analysis = dict(core)
+    analysis["suite"] = "v2"
+    analysis["composite"] = composite
+    # Fold in grader-reliability + long-context probe results if validate --suite v2 ran.
+    if os.path.exists(paths.phase0):
+        try:
+            p0 = load_json(paths.phase0)
+            analysis["grader_smoke"] = p0.get("grader_smoke")
+            analysis["long_context_probe"] = p0.get("long_context_probe")
+        except (OSError, json.JSONDecodeError):
+            pass
+    atomic_write_json(paths.analysis, analysis)
+
+    print(f"[analyze] suite=v2 R/C classes={len(core['per_class'])} "
+          f"composite_x_tasks={len(x_tasks)} composite_runs="
+          f"{composite['n_valid_subtask_runs'] if composite else 0}")
+    for cls, info in core["per_class"].items():
+        print(f"[analyze]   {cls}: rec={info['recommended_tier']} "
+              f"({info['confidence']}) ceiling={info['ceiling_tier']}")
+    if composite and composite.get("verdict"):
+        print(f"[analyze]   composite verdict: "
+              f"calibrated_wins={composite['verdict'].get('calibrated_wins')}")
+    print(f"[analyze] wrote {os.path.relpath(paths.analysis, paths.root)} "
+          f"(calibration.json is updated by `calibrate --suite v2`)")
+    return 0
+
+
 def cmd_analyze(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    paths = Paths(args.root, args.tasks_dir, suite)
     paths.ensure()
     tasks = {t["id"]: t for t in load_tasks(paths.tasks)}
     graded, bad = read_jsonl(paths.graded)
     if bad:
         print(f"[analyze] quarantined {bad} corrupt graded line(s)")
+    # Records without a real verdict (v2 grading_error, pass=None) are excluded from
+    # quality. For v1 every graded record has a bool pass, so this is a no-op.
+    graded = [g for g in graded if isinstance(g.get("pass"), bool)]
+
+    if suite == "v2":
+        return _analyze_v2(args, paths, tasks, graded)
+
     if not graded:
         print("[analyze] no graded records; run grade first.")
         return 1
@@ -1825,14 +2547,143 @@ def render_report(analysis: dict, tasks: dict) -> str:
     return "\n".join(L)
 
 
+def render_report_v2(analysis: dict, tasks: dict) -> str:
+    """Render RESULTS-v2.md: R/C class curves, the composite arm table + verdict, the
+    grader-reliability line, and v2 threats. No emoji (04 Section 8)."""
+    L = []
+    m = analysis.get("manifest", {})
+    L.append("# effortmining — Suite v2 Results (R-research / C-coding / X-composite)")
+    L.append("")
+    L.append("Auto-generated by `effort.py report --suite v2` from "
+             "`state/analysis-v2.json`. Numbers are computed from graded runs; this "
+             "file fabricates nothing.")
+    L.append("")
+    L.append("## 1. Run manifest")
+    L.append("")
+    L.append(f"- Model: {', '.join(str(x) for x in m.get('model', [])) or 'n/a'}")
+    L.append(f"- Generated: {m.get('generated_at', 'n/a')}")
+    L.append(f"- Graded R/C cells: {m.get('n_graded', 0)} · classes: "
+             f"{len(m.get('classes', []))}")
+    L.append("")
+
+    # 2. R/C class curves (reuse the v1 per-class curve shape).
+    per_class = analysis.get("per_class", {})
+    L.append("## 2. R-research / C-coding class curves")
+    L.append("")
+    if not per_class:
+        L.append("_No R/C graded records yet._")
+        L.append("")
+    for cls in sorted(per_class.keys()):
+        info = per_class[cls]
+        L.append(f"### {cls}")
+        L.append("")
+        L.append("```")
+        L.append(f"{'tier':<7} {'pass':>6}  {'Wilson 95%':<16} {'n':>3} {'med.out':>8}  bar")
+        for t in TIERS:
+            ti = info["tiers"].get(t)
+            if not ti:
+                continue
+            lo, hi = ti["wilson"]
+            L.append(f"{t:<7} {ti['pass_rate']*100:5.0f}%  "
+                     f"[{lo*100:4.0f},{hi*100:4.0f}]%      {ti['n']:>3} "
+                     f"{ti['median_out']:>8}  {_bar(ti['pass_rate'])}")
+        L.append("```")
+        L.append(f"Recommended: **{info['recommended_tier']}** (confidence: "
+                 f"{info['confidence']}, ceiling: {info['ceiling_tier']}, "
+                 f"delta vs ceiling: {info['delta_vs_ref']:+.3f})")
+        L.append("")
+
+    # 3. Composite policy arms.
+    comp = analysis.get("composite")
+    L.append("## 3. Composite policy arms (X-composite)")
+    L.append("")
+    if not comp or not comp.get("pooled"):
+        L.append("_No composite runs yet._")
+        L.append("")
+    else:
+        L.append("Summed output tokens and aggregate subtask pass rate per arm "
+                 "(pooled over X-tasks x reps):")
+        L.append("")
+        L.append("```")
+        L.append(f"{'arm':<16} {'out tokens':>12} {'agg pass':>9} {'k/n':>10}")
+        for a in COMPOSITE_ARMS:
+            pa = comp["pooled"].get(a)
+            if not pa:
+                continue
+            kn = f"{pa['k']}/{pa['n']}"
+            L.append(f"{a:<16} {pa['out_tokens']:>12.0f} "
+                     f"{_fmt_pct(pa['agg_pass']):>9} {kn:>10}")
+        L.append("```")
+        L.append("")
+        for base in ("inherit_xhigh", "uniform_high"):
+            s = comp.get("savings", {}).get(base, {})
+            pt, ci = s.get("point"), s.get("ci95", [None, None])
+            if pt is None:
+                L.append(f"- Savings vs **{base}**: n/a (arm absent).")
+            else:
+                lo = "n/a" if ci[0] is None else f"{ci[0]:.0f}"
+                hi = "n/a" if ci[1] is None else f"{ci[1]:.0f}"
+                L.append(f"- Savings vs **{base}**: {pt:.0f} output tokens "
+                         f"(95% CI [{lo}, {hi}]; calibrated cheaper iff CI excludes 0).")
+        cw = (comp.get("verdict") or {}).get("calibrated_wins")
+        verdict_str = ("CALIBRATED WINS" if cw is True else
+                       "calibrated does NOT dominate" if cw is False else
+                       "INDETERMINATE (incomplete arms)")
+        L.append("")
+        L.append(f"**Composite arm verdict: {verdict_str}.** Calibrated wins iff its "
+                 f"summed tokens are below BOTH baselines (bootstrap CI of the saving "
+                 f"excludes 0) AND its aggregate subtask pass is non-inferior to both at "
+                 f"delta={comp.get('delta_agg', DELTA_AGG)} (Newcombe).")
+        L.append("")
+
+    # 4. Grader reliability.
+    gs = analysis.get("grader_smoke")
+    L.append("## 4. Grader reliability")
+    L.append("")
+    if gs:
+        L.append(f"- Blind-grader smoke test: verdicts {gs.get('verdict_1')} / "
+                 f"{gs.get('verdict_2')} on a fixed artifact — "
+                 f"{'AGREE' if gs.get('agree') else 'DISAGREE'} "
+                 f"(source: {gs.get('source')}, grading cost "
+                 f"${gs.get('grading_cost_usd', 0.0):.4f}).")
+    else:
+        L.append("- Blind-grader smoke test: not run (see `validate --suite v2`).")
+    lc = analysis.get("long_context_probe")
+    if lc and lc.get("per_tier"):
+        pt = lc["per_tier"]
+        sizes = "; ".join(f"{t}: {pt[t]['input_tokens']} in / {pt[t]['output_tokens']} out"
+                          for t in ("low", "max") if t in pt)
+        L.append(f"- Long-context probe (~{lc.get('target_tokens')}-token input): {sizes}.")
+    L.append("")
+
+    # 5. Threats to validity (v2-specific).
+    L.append("## 5. Threats to validity (v2)")
+    L.append("")
+    L.append("- **Blind grading is an LLM judge.** The grader is pinned to medium "
+             "effort with a tier-blind payload (no field names the producer), scored "
+             "skeptic-first and rounded down. A parse failure is a `grading_error` "
+             "(excluded), never a task fail; grader spend is tracked separately from "
+             "the measured run cost.")
+    L.append("- **Composite arms consume, never feed, calibration.** The calibrated "
+             "arm reads the shared calibration.json; R-research/C-coding fall back to "
+             "`high` until `calibrate --suite v2` fits them.")
+    L.append("- **Small n.** Composite CIs bootstrap over few reps; a non-dominant "
+             "verdict means insufficient evidence, not proven parity.")
+    L.append("- **Adversarial hidden checks (C-coding).** pytest asserts run in the "
+             "Section 9.4 sandbox; network is not hard-blocked on macOS.")
+    L.append("")
+    return "\n".join(L)
+
+
 def cmd_report(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    paths = Paths(args.root, args.tasks_dir, suite)
     if not os.path.exists(paths.analysis):
-        print("[report] no analysis.json; run analyze first.")
+        print(f"[report] no {os.path.basename(paths.analysis)}; run analyze first.")
         return 1
     tasks = {t["id"]: t for t in load_tasks(paths.tasks)}
     analysis = load_json(paths.analysis)
-    md = render_report(analysis, tasks)
+    md = render_report_v2(analysis, tasks) if suite == "v2" else render_report(analysis, tasks)
     atomic_write_text(paths.results_md, md)
     print(f"[report] wrote {os.path.relpath(paths.results_md, paths.root)} "
           f"({len(md.splitlines())} lines)")
@@ -1891,9 +2742,95 @@ def load_dispatch_log(path: str, known_classes: set) -> tuple[dict, int, int]:
     return graded, consumed, skipped
 
 
+def _calibrate_v2(args, paths) -> int:
+    """Suite-v2 guarded refit: MERGE R-research/C-coding entries into the shared
+    calibration.json, preserving every existing class (v1 T1-T4, etc.). X-composite
+    is skipped — the composite arms consume the table, they never feed it. A mock v2
+    refit must not downgrade a proven v1 table, so v1 top-level provenance is kept."""
+    if not os.path.exists(paths.analysis):
+        print("[calibrate] no analysis-v2.json; run `analyze --suite v2` first.")
+        return 1
+    analysis = load_json(paths.analysis)
+    per_class = analysis.get("per_class", {}) or {}
+    existing = {}
+    if os.path.exists(paths.calibration):
+        try:
+            existing = load_json(paths.calibration)
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    existing_classes = dict(existing.get("classes", {}))
+    preserved = [c for c in existing_classes if c not in per_class]
+
+    known_classes = set(per_class.keys())
+    dispatch_path = os.path.join(paths.state, "dispatch-log.jsonl")
+    disp_graded, disp_consumed, disp_skipped = load_dispatch_log(dispatch_path, known_classes)
+
+    print("[calibrate] suite=v2 guarded refit (min-N gate={}, single-step, clamped); "
+          "R/C merged into calibration.json, existing classes preserved"
+          .format(MIN_N_REFIT))
+    moved = merged = 0
+    for cls in sorted(per_class.keys()):
+        if cls == COMPOSITE_CLASS:
+            continue  # composite arms consume calibration; never feed it.
+        info = per_class[cls]
+        candidate = info["recommended_tier"]
+        tiers_info = info["tiers"]
+        cur_tier = existing_classes.get(cls, {}).get("recommended_tier") or candidate
+
+        def eff_n(tier):
+            return (tiers_info.get(tier, {}).get("n", 0)
+                    + disp_graded.get((cls, tier), {}).get("n", 0))
+        proposed, reason, did_move = guarded_move(cur_tier, candidate, eff_n(cur_tier), eff_n(candidate))
+        if did_move:
+            moved += 1
+        rec_info = tiers_info.get(proposed, {})
+        pr = rec_info.get("pass_rate", 0.0)
+        prref = info["pass_rate_ref"]
+        existing_classes[cls] = {
+            "recommended_tier": proposed, "confidence": info["confidence"],
+            "n": eff_n(proposed), "n_graded": eff_n(proposed),
+            "fitted": proposed != cur_tier, "pass_rate": pr,
+            "ceiling_tier": info["ceiling_tier"], "pass_rate_ref": prref,
+            "delta_vs_ref": pr - prref,
+            "median_out_tokens": rec_info.get("median_out", 0),
+            "equivalence_low": info.get("equivalence_low"),
+            "overthinking": _overthinking_flag(info.get("overthinking", False)),
+            "suite": "v2",
+        }
+        merged += 1
+        arrow = "->" if proposed != cur_tier else "=="
+        print(f"[calibrate] {cls:<24} {cur_tier:>6} {arrow} {proposed:<6} "
+              f"(n={eff_n(proposed)}, pass {pr:.2f} vs ceiling {prref:.2f}) {reason}")
+
+    out = dict(existing)
+    out.setdefault("version", 1)
+    out.setdefault("proven", True)
+    out.setdefault("model", (analysis.get("manifest", {}).get("model") or [MODEL])[0]
+                   if analysis.get("manifest", {}).get("model") else MODEL)
+    out.setdefault("suite_version", "pilot-12")
+    out.setdefault("margin_delta", DELTA)
+    out["classes"] = existing_classes
+    prov = build_provenance(analysis.get("manifest", {}), "refit-v2")
+    out["refit_v2"] = {"suite": "v2", "min_n_gate": MIN_N_REFIT, "single_step": True,
+                       "classes_merged": merged, "classes_moved": moved,
+                       "dispatch_consumed": disp_consumed, "dispatch_skipped": disp_skipped,
+                       "mode": prov["mode"], "fitted_date": _dt.date.today().isoformat()}
+    top_prov = dict(out.get("provenance") or {})
+    top_prov["suite"] = "v2"
+    out["provenance"] = top_prov
+    atomic_write_json(paths.calibration, out)
+    print(f"[calibrate] merged {merged} v2 class(es) ({moved} moved) into "
+          f"{os.path.relpath(paths.calibration, paths.root)}; preserved "
+          f"{len(preserved)} existing class(es): {', '.join(preserved) or 'none'}")
+    return 0
+
+
 def cmd_calibrate(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    paths = Paths(args.root, args.tasks_dir, suite)
     paths.ensure()
+    if suite == "v2":
+        return _calibrate_v2(args, paths)
     if not os.path.exists(paths.analysis):
         print("[calibrate] no analysis.json; run analyze first.")
         return 1
@@ -1935,18 +2872,8 @@ def cmd_calibrate(args) -> int:
             return (tiers_info.get(tier, {}).get("n", 0)
                     + disp_graded.get((cls, tier), {}).get("n", 0))
         n_cur, n_cand = eff_n(cur_tier), eff_n(candidate)
-        gate_ok = (n_cur >= MIN_N_REFIT and n_cand >= MIN_N_REFIT)
-
-        proposed = cur_tier
-        reason = "hold"
-        if cur_tier == candidate:
-            reason = "no-change (candidate == current)"
-        elif not gate_ok:
-            reason = f"gated (n_cur={n_cur}, n_cand={n_cand} < {MIN_N_REFIT})"
-        else:
-            proposed = _step_toward(cur_tier, candidate)  # single-step, clamped
-            reason = ("moved one step toward candidate"
-                      + ("" if proposed == candidate else f" (candidate {candidate} is >1 step away)"))
+        proposed, reason, did_move = guarded_move(cur_tier, candidate, n_cur, n_cand)
+        if did_move:
             moved += 1
 
         rec_info = tiers_info.get(proposed, {})
@@ -2010,9 +2937,73 @@ _PROBE = ("Consider a 4x4 grid of switches, each on or off. A 'quiet' grid has n
           "state how many of the 65536 configurations are quiet. End with the count "
           "on its own line.")
 
+# Fixed inputs for the Phase 0 (v2) grader-reliability smoke test. The artifact is
+# constant so the two grader passes are graded on identical input and MUST agree.
+_SMOKE_TASK = {
+    "id": "SMOKE-R", "class": "R-research",
+    "prompt_text": "Summarize the provided note in one sentence and state its main claim.",
+    "checker": {"type": "blind-grader", "pass_threshold": 0.5, "max_score": 1.0,
+                "rubric": "The response is one sentence and names the note's main claim."},
+}
+_SMOKE_ARTIFACT = ("<response>\nRight-sizing per-subagent effort is where multi-agent "
+                   "token spend is won or lost; the note's main claim is that cheaper "
+                   "effort tiers often match expensive ones on easy work.\n</response>")
+
+
+def _v2_validate_extras(args, env) -> tuple:
+    """Phase 0 (v2) additions: (a) blind-grader smoke test — grade one fixed artifact
+    twice; the verdicts must agree — and (b) a ~10k-token long-context probe at low &
+    max to size input cost. Returns (grader_smoke, long_context)."""
+    mock = bool(getattr(args, "mock", False))
+    model = getattr(args, "model", MODEL)
+    g1 = grade_blind(_SMOKE_TASK, _SMOKE_ARTIFACT, grade_mock=mock, model=model, env=env)
+    g2 = grade_blind(_SMOKE_TASK, _SMOKE_ARTIFACT, grade_mock=mock, model=model, env=env)
+    agree = (g1.get("pass") is not None and g1.get("pass") == g2.get("pass"))
+    grader_smoke = {
+        "artifact_hash": hashlib.sha256(_SMOKE_ARTIFACT.encode()).hexdigest()[:16],
+        "verdict_1": g1.get("pass"), "verdict_2": g2.get("pass"), "agree": bool(agree),
+        "source": g1.get("grading_source"),
+        "grading_cost_usd": round(g1.get("grading_cost_usd", 0.0)
+                                  + g2.get("grading_cost_usd", 0.0), 6),
+    }
+
+    para = ("Effort tiers trade output tokens for quality with diminishing returns "
+            "that depend on task difficulty; this paragraph pads the context so the "
+            "long-context input cost can be sized before the matrix runs. ")
+    long_doc = para * (LONG_CONTEXT_TARGET_TOKENS * CHARS_PER_TOKEN // len(para) + 1)
+    probe = {"id": "SMOKE-LC", "class": "R-research",
+             "documents": [{"title": "long context", "content": long_doc}],
+             "checker": {"type": "exact", "expected": ["ok"]}}
+    block, doc_tokens = build_documents_block(probe["documents"])
+    probe["prompt_text"] = block + "\nReply with the single word: ok"
+    probe["document_tokens"] = doc_tokens
+    long_context = {"target_tokens": LONG_CONTEXT_TARGET_TOKENS,
+                    "estimated_doc_tokens": doc_tokens, "per_tier": {}}
+    for tier in ("low", "max"):
+        if mock:
+            ev = mock_envelope(probe, tier, 1, getattr(args, "seed", SEED_DEFAULT))
+            usage, cost = ev["usage"], ev["total_cost_usd"]
+        else:
+            res = invoke_claude("[probe]\n\n" + probe["prompt_text"], tier, model,
+                                RUN_TIMEOUT_S, env)
+            ev = {}
+            if res.returncode == 0 and res.stdout.strip():
+                try:
+                    ev = json.loads(res.stdout)
+                except json.JSONDecodeError:
+                    ev = {}
+            usage = ev.get("usage", {}) if isinstance(ev, dict) else {}
+            cost = float(ev.get("total_cost_usd", 0.0) or 0.0)
+        long_context["per_tier"][tier] = {
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "cost_usd": float(cost or 0.0)}
+    return grader_smoke, long_context
+
 
 def cmd_validate(args) -> int:
-    paths = Paths(args.root, args.tasks_dir)
+    suite = getattr(args, "suite", "v1")
+    paths = Paths(args.root, args.tasks_dir, suite)
     paths.ensure()
     env, audit = build_child_env()
     cli_version = "mock" if args.mock else detect_cli_version()
@@ -2177,6 +3168,20 @@ def cmd_validate(args) -> int:
     report["latency"]["timeout_headroom_ok"] = (RUN_TIMEOUT_S * 1000) > (max_lat * 3 + 1)
 
     report["gate_passed"] = bool(env_ok and modulation_ok and all_accepted and fidelity_ok)
+
+    # Suite v2: grader-reliability smoke test + long-context sizing. Blind-grading
+    # integrity gates the v2 matrix (the two smoke verdicts must agree); the
+    # long-context probe is informational (cost sizing only).
+    if suite == "v2":
+        grader_smoke, long_context = _v2_validate_extras(args, env)
+        report["suite"] = "v2"
+        report["grader_smoke"] = grader_smoke
+        report["long_context_probe"] = long_context
+        report["gate_passed"] = bool(report["gate_passed"] and grader_smoke["agree"])
+        print(f"[validate] v2 grader-smoke agree={grader_smoke['agree']} "
+              f"(verdicts {grader_smoke['verdict_1']}/{grader_smoke['verdict_2']}); "
+              f"long-context probe sized {long_context['estimated_doc_tokens']} doc tokens")
+
     atomic_write_json(paths.phase0, report)
 
     print(f"[validate] mock={args.mock} tiers_accepted="
@@ -2193,7 +3198,102 @@ def cmd_validate(args) -> int:
 # --------------------------------------------------------------------------- #
 # Subcommand: selftest (mock pipeline end-to-end + invariants)                #
 # --------------------------------------------------------------------------- #
+def _selftest_v2(args) -> int:
+    """Cheap suite-v2 mock pipeline: validate -> run -> run-composite -> grade
+    (--grade-mock) -> analyze -> report -> calibrate. Skips gracefully if tasks-v2/
+    has not been authored yet, so it is safe to ship before the v2 tasks land."""
+    tasks_v2 = args.tasks_dir or os.path.join(default_root(), "tasks-v2")
+    if not (os.path.isdir(tasks_v2) and glob.glob(os.path.join(tasks_v2, "*.json"))):
+        print(f"[selftest] suite v2: no task files in {tasks_v2}; skipping "
+              "(author tasks-v2/ to exercise the v2 mock pipeline).")
+        return 0
+    tmp = tempfile.mkdtemp(prefix="effort-selftest-v2-")
+    fails = []
+
+    def check(ok, msg):
+        print(f"  {'PASS' if ok else 'FAIL'} {msg}")
+        if not ok:
+            fails.append(msg)
+
+    try:
+        ns = argparse.Namespace(root=tmp, tasks_dir=tasks_v2, seed=SEED_DEFAULT,
+                                model=MODEL, mock=True, scale="pilot", parallel=1,
+                                rerun_failed=False, regrade=False, force=False,
+                                suite="v2", grade_mock=True, arms=",".join(COMPOSITE_ARMS),
+                                reps=2)
+        paths = Paths(tmp, tasks_v2, "v2")
+        all_v2 = load_tasks(tasks_v2)
+        has_x = any(t.get("class") == COMPOSITE_CLASS for t in all_v2)
+
+        print("[selftest] v2.1 validate --suite v2 --mock")
+        cmd_validate(ns)
+        check(os.path.exists(paths.phase0), "phase0-v2.json written")
+        p0 = load_json(paths.phase0)
+        check(p0.get("grader_smoke", {}).get("agree") is True,
+              "grader smoke verdicts agree (mock)")
+        check("long_context_probe" in p0, "long-context probe sized")
+        check(p0.get("gate_passed") is True, "v2 Phase 0 gate passed (mock)")
+
+        print("[selftest] v2.2 run --suite v2 --mock (R/C flat matrix)")
+        cmd_run(ns)
+        res, _ = read_jsonl(paths.results)
+        check(all(r.get("class") != COMPOSITE_CLASS for r in res),
+              "flat matrix excludes X-composite tasks")
+
+        print("[selftest] v2.3 run-composite --mock")
+        cmd_run_composite(ns)
+        comp, _ = read_jsonl(paths.results_composite)
+        check((len(comp) > 0) == has_x, "composite records written iff X-tasks exist")
+        if comp:
+            check(all({"composite_id", "arm", "subtask_id"} <= set(r) for r in comp),
+                  "composite records carry composite_id/arm/subtask_id")
+
+        print("[selftest] v2.4 grade --suite v2 --grade-mock")
+        cmd_grade(ns)
+        graded, _ = read_jsonl(paths.graded)
+        check(all(g.get("failure_class") in V2_VALID_FAILURE_CLASSES for g in graded),
+              "all v2 failure classes valid")
+
+        print("[selftest] v2.5 analyze --suite v2")
+        cmd_analyze(ns)
+        check(os.path.exists(paths.analysis), "analysis-v2.json written")
+        an = load_json(paths.analysis)
+        check(an.get("suite") == "v2", "analysis stamped suite=v2")
+
+        print("[selftest] v2.6 report --suite v2")
+        cmd_report(ns)
+        check(os.path.exists(paths.results_md), "RESULTS-v2.md written")
+        with open(paths.results_md, encoding="utf-8") as f:
+            md = f.read()
+        for section in ["Composite policy arms", "Grader reliability", "Threats to validity"]:
+            check(section in md, f"RESULTS-v2.md has '{section}'")
+        has_emoji = any(0x1F000 <= ord(ch) <= 0x1FAFF or 0x2600 <= ord(ch) <= 0x27BF
+                        for ch in md)
+        check(not has_emoji, "RESULTS-v2.md contains no emoji")
+
+        print("[selftest] v2.7 calibrate --suite v2 (merge, preserve existing classes)")
+        atomic_write_json(paths.calibration, {"version": 1, "proven": True,
+                          "classes": {"T1-mechanical": {"recommended_tier": "low"}}})
+        cmd_calibrate(ns)
+        cal = load_json(paths.calibration)
+        check("T1-mechanical" in cal["classes"], "existing T1-mechanical preserved on merge")
+        check(all(c["recommended_tier"] in TIERS for c in cal["classes"].values()),
+              "all merged tiers valid")
+        check(COMPOSITE_CLASS not in cal["classes"], "X-composite never enters calibration")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print()
+    if fails:
+        print(f"[selftest] v2: {len(fails)} FAILURE(S)")
+        return 1
+    print("[selftest] v2: ALL INVARIANTS HELD")
+    return 0
+
+
 def cmd_selftest(args) -> int:
+    if getattr(args, "suite", "v1") == "v2":
+        return _selftest_v2(args)
     real_tasks = args.tasks_dir or os.path.join(default_root(), "tasks")
     tmp = tempfile.mkdtemp(prefix="effort-selftest-")
     fails = []
@@ -2362,13 +3462,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--root", default=default_root(),
                    help="base dir for state/, raw/, RESULTS.md (default: this file's dir)")
     p.add_argument("--tasks-dir", default=None,
-                   help="task JSON dir (default: <root>/tasks)")
+                   help="task JSON dir (default: <root>/tasks, or <root>/tasks-v2 for --suite v2)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add_suite(sp, default="v1"):
+        sp.add_argument("--suite", choices=list(SUITES), default=default,
+                        help="task suite: v1 (default) or v2 (R/C/X classes)")
 
     v = sub.add_parser("validate", help="Phase 0 instrument gate")
     v.add_argument("--mock", action="store_true", help="fabricate probes, no real calls")
     v.add_argument("--model", default=MODEL)
     v.add_argument("--seed", type=int, default=SEED_DEFAULT)
+    add_suite(v)
     v.set_defaults(func=cmd_validate)
 
     r = sub.add_parser("run", help="execute the matrix")
@@ -2381,23 +3486,46 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also re-run cells whose graded verdict is fail")
     r.add_argument("--force", action="store_true",
                    help="bypass the Phase 0 hard gate (loud warning)")
+    add_suite(r)
     r.set_defaults(func=cmd_run)
 
-    g = sub.add_parser("grade", help="apply checkers to results")
+    rc = sub.add_parser("run-composite",
+                        help="execute X-composite jobs under policy arms (suite v2)")
+    rc.add_argument("--mock", action="store_true", help="fabricate envelopes offline")
+    rc.add_argument("--arms", default=",".join(COMPOSITE_ARMS),
+                    help="comma-separated arms (default: calibrated,inherit_xhigh,uniform_high)")
+    rc.add_argument("--reps", type=int, default=3)
+    rc.add_argument("--model", default=MODEL)
+    rc.add_argument("--seed", type=int, default=SEED_DEFAULT)
+    rc.add_argument("--parallel", type=int, default=3)
+    rc.add_argument("--force", action="store_true",
+                    help="bypass the Phase 0 (v2) hard gate (loud warning)")
+    add_suite(rc, default="v2")
+    rc.set_defaults(func=cmd_run_composite)
+
+    g = sub.add_parser("grade", help="apply checkers to results (incl. blind grader for v2)")
     g.add_argument("--regrade", action="store_true", help="re-grade all cells")
+    g.add_argument("--grade-mock", action="store_true",
+                   help="deterministic offline blind-grader verdicts (no model call)")
+    g.add_argument("--model", default=MODEL, help="model for the blind grader")
+    add_suite(g)
     g.set_defaults(func=cmd_grade)
 
     a = sub.add_parser("analyze", help="stats, NI decisions, policy comparison")
     a.add_argument("--seed", type=int, default=SEED_DEFAULT)
+    add_suite(a)
     a.set_defaults(func=cmd_analyze)
 
-    rp = sub.add_parser("report", help="render RESULTS.md")
+    rp = sub.add_parser("report", help="render RESULTS.md (RESULTS-v2.md for suite v2)")
+    add_suite(rp)
     rp.set_defaults(func=cmd_report)
 
     c = sub.add_parser("calibrate", help="guarded refit of the calibration table")
+    add_suite(c)
     c.set_defaults(func=cmd_calibrate)
 
     s = sub.add_parser("selftest", help="mock pipeline end-to-end + invariants")
+    add_suite(s)
     s.set_defaults(func=cmd_selftest)
     return p
 
@@ -2408,7 +3536,8 @@ def main(argv=None) -> int:
     for attr, default in (("mock", False), ("scale", "pilot"), ("parallel", 1),
                           ("seed", SEED_DEFAULT), ("model", MODEL),
                           ("rerun_failed", False), ("regrade", False),
-                          ("force", False), ("tasks_dir", None)):
+                          ("force", False), ("tasks_dir", None), ("suite", "v1"),
+                          ("grade_mock", False), ("arms", None), ("reps", 3)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
     return args.func(args)

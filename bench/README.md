@@ -32,6 +32,9 @@ python3 bench/effort.py report            # writes bench/RESULTS.md
 python3 bench/effort.py selftest
 ```
 
+For the v2 suite (R-research / C-coding / X-composite), see
+[Suite v2](#suite-v2--r-research--c-coding--x-composite) below.
+
 `--scale` is one of `pilot` (n=3, 180 runs, recommended), `fallback` (n=2, 120),
 `reduced` (T1+T2 only, n=3, 90 — good for shaking out the harness), or `extended`
 (n=5, 300 — for undecided classes). `run` is **resumable**: re-invoking it skips
@@ -106,7 +109,75 @@ re-bills completed work.
   → `grade` → `analyze` → `report` → `calibrate`) in a throwaway temp dir and asserts
   the invariants (files written, schemas valid, resumability, pass/fail spread, valid
   tiers, CIs in `[0,1]`, no emoji, no leftover temp files). Exit 0/1. This is the fast,
-  offline confidence check — no login or API spend.
+  offline confidence check — no login or API spend. `--suite v2` runs the v2 pipeline
+  (skips gracefully if `tasks-v2/` is empty).
+
+## Suite v2 — R-research / C-coding / X-composite
+
+`--suite v2` (default `v1`) adds three high-value task classes to prove effort
+right-sizing does not regress quality on serious work. **v1 behavior is byte-for-byte
+unchanged**: every v2 path is additive, and v2 uses its own `-v2`-suffixed state files
+(`results-v2.jsonl`, `graded-v2.jsonl`, `analysis-v2.json`, `phase0-v2.json`,
+`RESULTS-v2.md`). `state/calibration.json` is **shared** — v2 extends its class table;
+the composite arms consume it. Tasks come from `tasks-v2/` (override with `--tasks-dir`).
+
+- **Task schema (v2):** `{id, class: "R-research"|"C-coding"|"X-composite", prompt,
+  documents?: [{title, content}], checker, max_output_guardrail, timeout_s}`.
+  `documents[]` are prepended to the prompt as clearly-delimited context blocks and
+  their (estimated) tokens are counted in input accounting (recorded as
+  `document_tokens`). `prompt` may be an array of lines (v1 style) or a plain string.
+
+- **R-research** — long provided documents; checker is `exact` **or** `blind-grader`.
+  The **blind grader** (`checker.type=="blind-grader"`, payload
+  `{rubric, pass_threshold, max_score}`) grades non-deterministic prose by invoking
+  `claude -p --model claude-opus-4-8 --effort medium --output-format json` with a fixed
+  template implementing the [effort-grader contract](../agents/effort-grader.md). Its
+  payload names **only** `{task_prompt, rubric, artifact}` — there is structurally no
+  tier/agent/effort/rep field, so the grade cannot be biased by effort level. Output is
+  parsed defensively (first balanced JSON object); a parse failure is retried once, then
+  flagged `grading_error` — **excluded from quality, never counted as a task fail**.
+  Grader tokens/cost are recorded under separate `grading_*` keys so grading spend never
+  pollutes the measured run cost. `grade --grade-mock` gives deterministic offline
+  verdicts keyed by artifact hash.
+
+- **C-coding** — hidden adversarial `pytest-asserts`, run in the same §9.4 sandbox as v1.
+
+- **X-composite** — multi-subtask jobs (`subtasks: [{id, class, prompt, checker}]`, each
+  checker `exact` or `pytest-asserts`, never blind). `run-composite` executes each
+  X-task × arm × rep, running the subtasks **sequentially** (each an independent
+  `claude -p` call), grading inline, and appending one record per subtask
+  (`+ {composite_id, arm, subtask_id}`) to `raw/results-composite.jsonl`, resumable by
+  `(composite, arm, rep, subtask)`. Three **policy arms** set each subtask's tier:
+  `calibrated` (read `calibration.json` for the subtask's class; R-research/C-coding
+  fall back to `high` until fitted), `inherit_xhigh` (`xhigh` everywhere, the status
+  quo), and `uniform_high` (`high` everywhere, the model default).
+
+- **`analyze --suite v2`** runs R/C through the existing per-class machinery (pooling,
+  Wilson, ceiling-referenced NI) and adds the **composite arm analysis**: summed output
+  tokens per arm (mean over reps ± bootstrap CI) and aggregate subtask pass per arm, with
+  the pre-registered verdict — *calibrated wins iff its summed tokens are below both
+  baselines (bootstrap CI of the saving excludes 0) **and** its aggregate pass is
+  non-inferior to both at δ=5pp (Newcombe)*. Writes `analysis-v2.json` only.
+
+- **`validate --suite v2`** adds a **grader-reliability smoke test** (grade one fixed
+  artifact twice; the verdicts must agree — this gates the v2 matrix) and a
+  **long-context probe** (~10k-token input at `low`/`max`, to size cost) to
+  `phase0-v2.json`. **`calibrate --suite v2`** merges R-research/C-coding entries into
+  the shared `calibration.json` (same guarded rules; each stamped `suite:"v2"`),
+  **preserving** existing classes; X-composite never enters the table. **`report
+  --suite v2`** renders `RESULTS-v2.md` (R/C curves, composite arm table + verdict,
+  grader-reliability line, v2 threats).
+
+```bash
+# v2 pipeline (offline dry-run: append --mock / --grade-mock to each spending step)
+python3 bench/effort.py validate      --suite v2 --model claude-opus-4-8
+python3 bench/effort.py run            --suite v2 --parallel 3
+python3 bench/effort.py run-composite  --suite v2 --arms calibrated,inherit_xhigh,uniform_high --reps 3 --parallel 3
+python3 bench/effort.py grade          --suite v2
+python3 bench/effort.py analyze        --suite v2
+python3 bench/effort.py calibrate      --suite v2      # merges R/C into calibration.json
+python3 bench/effort.py report         --suite v2      # writes bench/RESULTS-v2.md
+```
 
 ## State-file map
 
@@ -120,10 +191,16 @@ from `--tasks-dir` (default `<root>/tasks`).
 | `state/phase0.json` | `validate` | no (gitignored) | Phase 0 instrument report + gate verdict |
 | `state/graded.jsonl` | `grade` | no (gitignored) | graded outcomes, one per cell |
 | `state/analysis.json` | `analyze` | no (gitignored) | full statistical analysis |
-| `state/calibration.json` | `analyze`, `calibrate` | **yes** | the calibration table (the deliverable) |
+| `state/calibration.json` | `analyze`, `calibrate` (both suites) | **yes** | the calibration table (the deliverable; shared v1+v2) |
 | `state/capture/` | `run`, `validate` (real) | no (gitignored) | effort-fidelity Stop-hook + sidecar |
 | `state/dispatch-log.jsonl` | B1 skill/hook (runtime) | no (gitignored) | dual-source dispatch receipts read by `calibrate` |
 | `RESULTS.md` | `report` | yes | human-readable results |
+| `raw/results-v2.jsonl` | `run --suite v2` | no (gitignored) | v2 R/C runs (append-only) |
+| `raw/results-composite.jsonl` | `run-composite` | no (gitignored) | v2 composite subtask runs (graded inline) |
+| `state/graded-v2.jsonl` | `grade --suite v2` | no (gitignored) | v2 graded outcomes (incl. blind grader) |
+| `state/phase0-v2.json` | `validate --suite v2` | no (gitignored) | Phase 0 + grader-smoke + long-context probe |
+| `state/analysis-v2.json` | `analyze --suite v2` | no (gitignored) | v2 per-class + composite arm analysis |
+| `RESULTS-v2.md` | `report --suite v2` | yes | v2 human-readable results |
 
 `raw/` and `state/*` are gitignored; `state/calibration.json` is force-tracked
 (`!bench/state/calibration.json`) because it is the shipped artifact.
@@ -170,13 +247,21 @@ executed **only** here — never elsewhere in the harness.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests    # 60 unit tests
-python3 bench/effort.py selftest         # offline end-to-end invariants
+python3 -m unittest discover -s tests    # 117 unit tests (80 v1 + 37 v2)
+python3 bench/effort.py selftest              # offline end-to-end invariants (v1)
+python3 bench/effort.py selftest --suite v2   # offline end-to-end invariants (v2)
 ```
 
-The unit suite covers the Wilson interval against textbook values, the Newcombe
-difference CI against the published worked example, the non-inferiority rule and its
-edge cases, the ceiling-referenced calibration and overthinking flag, TOST equivalence,
-the dual-source dispatch-log normalization, effort-fidelity validity, resumability,
-seeded-shuffle and bootstrap determinism, atomic-write crash-safety, env sanitization,
-answer parsing, and both graders.
+The v1 suite (`tests/test_effort.py`, 80 tests) covers the Wilson interval against
+textbook values, the Newcombe difference CI against the published worked example, the
+non-inferiority rule and its edge cases, the ceiling-referenced calibration and
+overthinking flag, TOST equivalence, the dual-source dispatch-log normalization,
+effort-fidelity validity, resumability, seeded-shuffle and bootstrap determinism,
+atomic-write crash-safety, env sanitization, answer parsing, and both graders.
+
+The v2 suite (`tests/test_effort_v2.py`, 37 tests, over tiny fixtures in
+`tests/fixtures-v2/`) covers `--suite` path isolation (v1 files untouched), document
+prepending + token accounting, the blind-grader payload's structural blindness
+(asserted on the constructed prompt), the grader parse-failure taxonomy, composite
+resumability, arm-policy tier mapping (incl. the calibrated-table fallback), the
+composite arm-analysis math on synthetic data, and a mock end-to-end v2 pipeline.
