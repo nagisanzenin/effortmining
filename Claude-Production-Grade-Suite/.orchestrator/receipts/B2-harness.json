@@ -1,0 +1,37 @@
+{
+  "task_id": "B2-harness",
+  "agent": "software-engineer",
+  "phase": "BUILD",
+  "status": "complete",
+  "artifacts": [
+    "bench/effort.py",
+    "bench/README.md",
+    "tests/test_effort.py",
+    ".gitignore"
+  ],
+  "metrics": {
+    "loc": 1851,
+    "loc_nonblank": 1639,
+    "loc_tests": 407,
+    "subcommands": 7,
+    "unit_tests": 47,
+    "tests_passing": 47,
+    "selftest_exit": 0,
+    "oracle_validator_exit": 0
+  },
+  "effort": {
+    "files_read": 15,
+    "files_written": 5,
+    "tool_calls": 21
+  },
+  "loops": [
+    {
+      "id": "b2-harness-oracle",
+      "iterations": 2,
+      "ratchet": "unittest 1-fail -> 0-fail (selftest green throughout)",
+      "exit": "converged"
+    }
+  ],
+  "verification": "python3 -m unittest = 47/47 OK; python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0); Wilson (0/10,5/10,10/10) and Newcombe (56/70 vs 48/80 -> 0.0524,0.3339) match published values; validate_oracles.py still 34/34; .gitignore verified (calibration.json + RESULTS.md tracked, state/raw ignored); no worktree pollution (selftest/tests use tempdirs).",
+  "notes": "Single-file stdlib-only harness (Python 3.14). 7 subcommands: validate/run/grade/analyze/report/calibrate/selftest. All writes atomic (tempfile+os.replace); results.jsonl append-only + resumable; corruption-quarantining JSONL reader; env sanitization strips CLAUDE_CODE_EFFORT_LEVEL/EXTRA_BODY(effort)/MAX_OUTPUT_TOKENS/ANTHROPIC_API_KEY; model code executed ONLY in grade sandbox (python3 -I -S, resource limits, wall timeout; subprocess isolation not a jail, documented). Stats implemented in stdlib: Wilson, Newcombe method-10 diff CI, seeded stratified bootstrap, NI rule with both guards. DESIGN NOTE for QA/reviewers: at pilot n=3 (9 trials/class-cell) the Newcombe interval guard rarely clears even for identical-performing tiers (two 9/9 samples give diff_lo=-0.30 < -0.10), so calibration will usually recommend max with confidence=low and the headline savings can be negative -- this is the statistically honest, pre-registered outcome (04 Section 5.4: 'intervals are wide... not proof of parity... priority for n=5 extension'), not a harness bug. `max` is always treated as a candidate (reference is non-inferior to itself) to avoid an empty candidate set. Where the B2 brief and 04 Section 9 conflicted on file layout, followed the brief's explicit bench/state + bench/raw + gitignore directive; kept 04 Section 9.3 record schema (superset with requested/effective_effort, model, cli_version, scale). Did NOT run real `claude` generations -- QA phase owns Phase 0 + pilot spend."
+}

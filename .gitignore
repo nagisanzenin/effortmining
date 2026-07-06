@@ -12,3 +12,8 @@ __pycache__/
 
 # benchmark raw transcripts can get huge — results/ summaries are committed, raw runs are not
 bench/raw/
+
+# benchmark derived state (phase0, graded, analysis) is regenerable and gitignored;
+# the calibration table is the committed deliverable and must be tracked.
+bench/state/*
+!bench/state/calibration.json
