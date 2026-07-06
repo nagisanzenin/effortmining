@@ -1,6 +1,6 @@
 # effortmining
 
-![version](https://img.shields.io/badge/version-0.3.0-blue)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
 ![status](https://img.shields.io/badge/status-pilot--proven-brightgreen)
 ![effort](https://img.shields.io/badge/effort-low%E2%80%A6max%20(5%20tiers)-green)
 ![telemetry](https://img.shields.io/badge/telemetry-100%25%20local-green)
@@ -79,6 +79,17 @@ The pre-registered pilot ran **12 tasks x 5 effort tiers x 3 reps = 180 runs** o
 **Overthinking is real (H3, confirmed in all four classes) — as saturation, not regression.** `max` spends strictly more tokens than `xhigh` with **zero** pass-rate gain in every class (it never *lost* quality in the pilot; it bought nothing), so the non-inferiority reference is each class's empirical ceiling tier, never mechanically `max` — which is why no class is calibrated to `max`.
 
 **Honest caveats — this is a pilot.** n = 3 reps/cell, so per-class confidence is **low** by design: the pre-registered Wilson/bootstrap intervals are wide, and "non-inferior" means *no evidence of >10 pp degradation*, not proof of parity. **† T4's three tasks were flagged by the pre-registered misclassification check** (all pass at `low` — too easy for Opus 4.8), so T4's `low` recommendation reflects the *task-suite difficulty ceiling*, not a claim that hard reasoning needs no effort; harder T4 tasks are queued as future work. **T3 is the class with the real quality gradient**: `low` fails a third of the time (6/9) while `high` is the sweet spot (157 median tokens for 9/9, vs `max`'s 648 for the same 9/9). Single model, self-contained prompt-only tasks, one machine — re-fit per model.
+
+## Measured results v2 (real work: research, coding, composites — 2026-07-07)
+
+A second pre-registered suite (`docs/research/05-benchmark-v2-methodology.md`) tested the user-facing question: does calibrated dispatch regress quality on **high-value work** — document-grounded research (8k-token invented-fact corpora), real coding (hidden adversarial pytest), and composite multi-part jobs run end-to-end under three policies? 225 additional real runs on `claude-opus-4-8`, zero API errors. Grader reliability gate: the blind grader agreed with itself **12/12 (100%)** on double-graded artifacts (H6, gate ≥90%).
+
+- **Isolated research & coding saturate at `low`** (90/90 pass at every tier — H4 not confirmed): even interval-tree implementations against 24 hidden adversarial asserts and cross-document synthesis are quality-flat across tiers on Opus 4.8. The cost is not flat: the token ladder still climbs ~7x to `max`.
+- **The composite A/B produced the project's first pre-registered NO-WIN — kept, not buried.** The as-fitted table (everything → `low`) scored 42/45 vs inheritance's 45/45: below the δ=5pp quality bar, so `calibrated_wins=false`. All three failures are one subtask.
+- **That subtask is the find of the suite.** `X1.3` — name the single root-cause *job* from a stack of postmortems — is the first genuinely tier-discriminating research task: `low` 0/3, `high` 1/6, **`xhigh` 3/3**. Hard research exists; our isolated R-tasks just weren't it. The pre-registered misclassification check caught this, and `calibration.json` now ships machine-readable warnings on every class whose fit rests on saturated tasks (R-research, C-coding, T4).
+- **The caveat-aware policy wins (exploratory, not pre-registered):** honoring the shipped warnings — hard research → `xhigh`, everything else → `low` — scores **45/45 (100%)** at **15.6% fewer tokens than inheritance@`xhigh`** (25,641 vs 30,370 across the composite workload) and beats uniform-`high` on quality (+4.4pp) at +5% tokens. This is exactly the policy the ambient hook injects: the fitted table *plus its own warnings*.
+
+**Honest reading of v1+v2 together:** effort saturates on most self-contained work (savings are real and large), genuinely tier-demanding tasks exist but are rare and specific (T3 diagnosis, X1.3-grade research), class-level calibration is only as sharp as the tasks that fit it — which is why the warnings are part of the product, not an apology. Harder R/C fitting tasks and a refit are the top roadmap item. Full v2 report: `bench/RESULTS-v2.md`.
 
 **Scope — all five API effort levels were swept; the two pseudo-levels are out by construction.** `low/medium/high/xhigh/max` all ran (that is where the `uniform_max` row in `bench/RESULTS.md` §5 comes from — 9,520 tokens, 6.4x the calibrated policy at identical quality). `auto` is not a level — it resolves to the model's static default, i.e. the `high` column on Opus 4.8. `ultracode` is deliberately not benchmarked: it is a Claude Code setting, not an API effort level — it sends `xhigh` to the model and additionally changes *orchestration* (dynamic multi-agent workflows), is not requestable via `--effort`/settings/env, and comparing a whole workflow against a single tier-pinned invocation would not be a like-for-like test of per-invocation effort (see `docs/research/01b-docs-verification.md`).
 

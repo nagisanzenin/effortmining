@@ -2058,12 +2058,20 @@ def build_calibration_warnings(per_class: dict, mode: str) -> list:
     warnings = []
     if mode != "real":
         return warnings
-    ceilings = [info.get("pass_rate_ref", 0.0) for info in per_class.values()]
-    if not (ceilings and all(abs(c - 1.0) < 1e-9 for c in ceilings)):
-        return warnings
+    # Classes whose whole design intent is to saturate at low: a misclass flag on
+    # them is expected, not a fit blindness — never warn on these.
+    easy_by_design = {"T1-mechanical", "T2-simple-transform"}
     for cls, info in per_class.items():
-        if ("hard" in cls.lower() and info.get("recommended_tier") == "low"
-                and info.get("misclassed_tasks")):
+        if cls in easy_by_design:
+            continue
+        mis = info.get("misclassed_tasks") or []
+        n_tasks = info.get("n_tasks") or 3
+        all_flagged = len(mis) >= n_tasks
+        hard_collapse = ("hard" in cls.lower() and info.get("recommended_tier") == "low"
+                         and mis and abs(info.get("pass_rate_ref", 0.0) - 1.0) < 1e-9)
+        # v2 lesson (composite X1.3): a non-easy class whose EVERY fitting task
+        # saturates at low is blind to harder in-class instances — warn.
+        if hard_collapse or (all_flagged and info.get("recommended_tier") == "low"):
             warnings.append(f"class {cls} fit rests on tasks flagged misclassed")
     return warnings
 
@@ -2855,6 +2863,10 @@ def _calibrate_v2(args, paths) -> int:
     out.setdefault("margin_delta", DELTA)
     out["classes"] = existing_classes
     prov = build_provenance(analysis.get("manifest", {}), "refit-v2")
+    # Union v2-class warnings with whatever the v1 fit already carries — the v2
+    # merge must never silently drop (or silently lack) fit-blindness caveats.
+    v2_warnings = build_calibration_warnings(per_class, prov["mode"])
+    out["warnings"] = sorted(set((out.get("warnings") or [])) | set(v2_warnings))
     out["refit_v2"] = {"suite": "v2", "min_n_gate": MIN_N_REFIT, "single_step": True,
                        "classes_merged": merged, "classes_moved": moved,
                        "dispatch_consumed": disp_consumed, "dispatch_skipped": disp_skipped,

@@ -7,19 +7,27 @@
     "cli_version": "2.1.201 (Claude Code)",
     "runs": 180,
     "graded": 180,
-    "fitted_from": "analysis",
+    "fitted_from": "refit",
     "suite": "v2"
   },
-  "fitted_date": "2026-07-06",
+  "fitted_date": "2026-07-07",
   "model": "claude-opus-4-8",
   "suite_version": "pilot-12",
   "margin_delta": 0.1,
+  "refit": {
+    "min_n_gate": 9,
+    "single_step": true,
+    "classes_moved": 0,
+    "dispatch_consumed": 0,
+    "dispatch_skipped": 0
+  },
   "classes": {
     "T1-mechanical": {
       "recommended_tier": "low",
       "confidence": "low",
+      "n": 9,
       "n_graded": 9,
-      "fitted": true,
+      "fitted": false,
       "pass_rate": 1.0,
       "ceiling_tier": "low",
       "pass_rate_ref": 1.0,
@@ -31,8 +39,9 @@
     "T2-simple-transform": {
       "recommended_tier": "low",
       "confidence": "low",
+      "n": 9,
       "n_graded": 9,
-      "fitted": true,
+      "fitted": false,
       "pass_rate": 1.0,
       "ceiling_tier": "low",
       "pass_rate_ref": 1.0,
@@ -44,8 +53,9 @@
     "T3-moderate-reasoning": {
       "recommended_tier": "high",
       "confidence": "low",
+      "n": 9,
       "n_graded": 9,
-      "fitted": true,
+      "fitted": false,
       "pass_rate": 1.0,
       "ceiling_tier": "high",
       "pass_rate_ref": 1.0,
@@ -57,8 +67,9 @@
     "T4-hard-reasoning": {
       "recommended_tier": "low",
       "confidence": "low",
+      "n": 9,
       "n_graded": 9,
-      "fitted": true,
+      "fitted": false,
       "pass_rate": 1.0,
       "ceiling_tier": "low",
       "pass_rate_ref": 1.0,
@@ -128,9 +139,12 @@
     "aggregate_pass_calibrated": 1.0,
     "noninferior_agg": true,
     "incomplete_matrix": false,
-    "undominated": true
+    "undominated": true,
+    "note": "policy block reflects the analyze-time recommendation; guarded single-step tier moves may lag the NI-optimal tier"
   },
   "warnings": [
+    "class C-coding fit rests on tasks flagged misclassed",
+    "class R-research fit rests on tasks flagged misclassed",
     "class T4-hard-reasoning fit rests on tasks flagged misclassed"
   ],
   "refit_v2": {

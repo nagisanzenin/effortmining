@@ -1,0 +1,104 @@
+{
+ "h6_agreement": 1.0,
+ "n": 12,
+ "threshold": 0.9,
+ "pass": true,
+ "details": [
+  {
+   "task": "R3",
+   "tier": "medium",
+   "rep": 3,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "xhigh",
+   "rep": 1,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R2",
+   "tier": "high",
+   "rep": 1,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R2",
+   "tier": "max",
+   "rep": 2,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R2",
+   "tier": "high",
+   "rep": 2,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "max",
+   "rep": 1,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "xhigh",
+   "rep": 2,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "max",
+   "rep": 2,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "xhigh",
+   "rep": 3,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "high",
+   "rep": 3,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R2",
+   "tier": "xhigh",
+   "rep": 2,
+   "first": true,
+   "second": true,
+   "agree": true
+  },
+  {
+   "task": "R3",
+   "tier": "low",
+   "rep": 3,
+   "first": true,
+   "second": true,
+   "agree": true
+  }
+ ]
+}

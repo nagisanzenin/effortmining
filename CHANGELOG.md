@@ -4,6 +4,22 @@ All notable changes to effortmining are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-07
+
+Benchmark v2: the no-regression proof on real work (research, coding, composite jobs).
+
+### Added
+
+- **Suite v2** (`bench/tasks-v2/`, 9 tasks): document-grounded research with invented facts, real coding vs hidden adversarial pytest, composite multi-part jobs; `--suite v2` across the harness; blind-grader path live (H6 reliability 12/12); `run-composite` three-policy A/B.
+- **225 more real runs.** Isolated R/C saturate at `low` (90/90). Composite pre-registered verdict: as-fitted table LOST (42/45 vs 45/45) — kept honestly. `X1.3` is the first tier-discriminating research task (`low` 0/3, `high` 1/6, `xhigh` 3/3).
+- **Caveat-aware policy (exploratory): 100% quality at −15.6% tokens vs inheritance** — the policy the ambient hook already injects (table + its own warnings).
+- **Machine-readable fit-blindness warnings** in `calibration.json` for every non-easy class whose fitting tasks all saturate (R-research, C-coding, T4); ambient policy line marks them with `*` automatically.
+
+### Fixed
+
+- Composite calibrated arm silently fell back to `high` for all subtasks (class-vocabulary mismatch) — alias normalization + loud fallback + regression tests; the buggy arm pass was archived and re-run.
+- Grader score-scale reconciliation (unit fraction vs rubric points) — accepts both, normalizes, records which.
+
 ## [0.3.0] — 2026-07-06
 
 Ambient mode: the plugin now works with zero commands — install it and calibrated dispatch happens on its own.

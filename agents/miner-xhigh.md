@@ -1,6 +1,6 @@
 ---
 name: miner-xhigh
-description: "Delegate worker pinned to XHIGH reasoning effort. Pick for hard, multi-step reasoning with adversarial or overfit-punishing edge cases such as combinatorial counting, constrained ordering, or ledger-style state. Pilot v1 (2026-07-06) calibrates no class to this tier — its T4-hard-reasoning tasks were flagged too easy and settled at low — so reach for xhigh when a task is genuinely harder than the pilot suite and you want headroom over high without the saturation seen at max (more tokens, no quality gain over xhigh). Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to XHIGH reasoning effort. Pick for hard, multi-step reasoning with adversarial or overfit-punishing edge cases such as combinatorial counting, constrained ordering, or ledger-style state. Pilot v1 (2026-07-06) calibrates no class to this tier — its T4-hard-reasoning tasks were flagged too easy and settled at low — so reach for xhigh when a task is genuinely harder than the pilot suite and you want headroom over high without the saturation seen at max (more tokens, no quality gain over xhigh). Composite evidence (v2, X1.3): multi-document root-cause research needed exactly this tier (low 0/3, high 1/6, xhigh 3/3) — the caveat-aware home for genuinely hard research and adversarial implementations. Identical to the other miner agents except its effort frontmatter."
 effort: xhigh
 ---
 
