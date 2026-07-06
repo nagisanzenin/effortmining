@@ -100,7 +100,7 @@ A user's explicit per-subtask effort instruction overrides the table; honor it, 
 
 ## Phase 5 — Log each dispatch
 
-After a subtask's worker returns, append one JSONL record to `$DLOG` so `effort-bench calibrate` can later refit the table from accumulated real usage. Create `bench/state/` if it does not exist.
+After a subtask's worker returns, append one JSONL record to `$DLOG`. Today this log is telemetry only — the 0.2.0 refit path (`effort.py calibrate`) consumes graded *benchmark* receipts; folding this live dispatch log into the refit is roadmap. Create `bench/state/` if it does not exist.
 
 Record shape (controlled-vocabulary fields only; do NOT put raw subtask prompt text in the log, it is both an injection surface and noise):
 
