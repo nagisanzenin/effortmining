@@ -52,6 +52,7 @@ import json
 import math
 import os
 import random
+import secrets
 import shlex
 import shutil
 import statistics
@@ -121,6 +122,29 @@ def _transient(text: str) -> bool:
             r"timeout|connection|econn|socket|network|unavailable|eof)",
             re.IGNORECASE)
     return bool(_TRANSIENT_RE.search(text or ""))
+
+
+def _is_transient_failure(res, env_json) -> bool:
+    """Decide whether a failed `claude` invocation is worth a backoff retry.
+
+    Rate-limit / overload / 5xx signatures are trusted ONLY from stderr or a
+    parsed error field — never from stdout. Model output legitimately contains
+    words like "timeout" or "429" as task data, and scanning it for transient
+    patterns caused spurious retries (review L9). A timeout or an is_error
+    envelope is transient regardless.
+    """
+    if getattr(res, "timed_out", False):
+        return True
+    err_field = ""
+    if isinstance(env_json, dict):
+        ef = env_json.get("error")
+        if isinstance(ef, str):
+            err_field = ef
+        elif env_json.get("is_error"):
+            err_field = str(env_json.get("result") or "")
+    if _transient(getattr(res, "stderr", "") or "") or _transient(err_field):
+        return True
+    return bool(isinstance(env_json, dict) and env_json.get("is_error"))
 
 
 # --------------------------------------------------------------------------- #
@@ -365,7 +389,9 @@ def bootstrap_ci(cells: dict, stat_fn, b: int = BOOTSTRAP_B, seed: int = SEED_DE
     if point is None:
         return (None, None, None)
     rng = random.Random(seed)
-    keys = list(cells.keys())
+    # Sorted so the seeded resample sequence is independent of dict insertion /
+    # graded.jsonl append order (review M1).
+    keys = sorted(cells.keys())
     draws = []
     for _ in range(b):
         resampled = {}
@@ -501,20 +527,21 @@ def run_sandboxed(program: str, timeout_s: int) -> _SandboxResult:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-_ASSERTS_OK = "__EFFORTMINING_ASSERTS_OK__"
-
-
 def grade_pytest(raw: str, checker: dict) -> tuple[bool, str, str]:
     code = extract_code_block(raw)
     if code is None:
         return (False, "parse_fail", "no code block")
     asserts = checker["asserts"]
     tmo = min(int(checker.get("timeout_s", 5)), GRADE_TIMEOUT_CEILING_S)
-    program = code + "\n\n" + "\n".join(asserts) + f"\n\nprint({_ASSERTS_OK!r})\n"
+    # Per-run unguessable success sentinel (review L1): model code cannot forge a
+    # pass by printing a fixed token and exiting before our asserts run, because
+    # the token it would have to print is randomized every grading call.
+    sentinel = "__EFFORTMINING_OK_" + secrets.token_hex(8) + "__"
+    program = code + "\n\n" + "\n".join(asserts) + f"\n\nprint({sentinel!r})\n"
     res = run_sandboxed(program, tmo)
     if res.timed_out:
         return (False, "timeout", f"exceeded {tmo}s")
-    if res.returncode == 0 and res.stdout.strip().endswith(_ASSERTS_OK):
+    if res.returncode == 0 and res.stdout.strip().endswith(sentinel):
         return (True, "none", f"{len(asserts)}/{len(asserts)} asserts")
     last = (res.stderr.strip().splitlines() or [""])[-1]
     # Per 04 Section 2.1: AssertionError / exception / missing entrypoint all map
@@ -922,10 +949,10 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
                                       raw_answer_path=rel_answer,
                                       effort_effective=effective,
                                       effort_effective_source=source)
-        # failure: decide transient vs permanent
-        last_detail = (res.stderr or "") + " " + (res.stdout or "")[:200]
-        transient = res.timed_out or _transient(last_detail) or (
-            env_json is not None and env_json.get("is_error"))
+        # failure: decide transient vs permanent (review L9: transient signatures
+        # are trusted from stderr / a parsed error field only, never from stdout).
+        last_detail = ((res.stderr or "") + " " + (res.stdout or "")[:200]).strip()
+        transient = _is_transient_failure(res, env_json)
         if transient and retries < MAX_RETRIES:
             retries += 1
             delay = min(BACKOFF_CAP, BACKOFF_BASE * (2 ** (retries - 1)))
@@ -1133,7 +1160,16 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
         key = (g["task_id"], g["tier"])
         cell_pass_vals.setdefault(key, []).append(1 if g["pass"] else 0)
         cell_out_vals.setdefault(key, []).append(int(g.get("output_tokens", 0)))
-    for key, passes in cell_pass_vals.items():
+    # Canonicalize within-cell value order so the seeded bootstrap (which indexes
+    # into these lists) is independent of graded.jsonl append order (review M1).
+    # Pass and out values are consumed independently — never paired per run — so
+    # sorting each list on its own does not corrupt any statistic.
+    for vals in cell_pass_vals.values():
+        vals.sort()
+    for vals in cell_out_vals.values():
+        vals.sort()
+    for key in sorted(cell_pass_vals.keys()):
+        passes = cell_pass_vals[key]
         n = len(passes)
         k = sum(passes)
         lo, hi = wilson_interval(k, n)
@@ -1142,8 +1178,6 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
             "task_id": key[0], "tier": key[1], "n": n, "passes": k,
             "pass_rate": k / n if n else 0.0, "wilson": [lo, hi],
             "median_out": statistics.median(outs) if outs else 0,
-            "median_total": statistics.median(
-                [o for o in outs]) if outs else 0,
         }
 
     def cell_mean_pass(tid, tier):
@@ -1224,14 +1258,20 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
             if equivalence_low:
                 confidence = "high(equiv)"
 
-        # H3 overthinking flag: max pass <= xhigh pass AND max tokens > xhigh tokens.
-        overthinking = False
+        # H3 overthinking (04 Section 5.4). Surfaced split (review M4):
+        #   flag              — pre-registered rule: p_max <= p_xhigh AND max tokens up
+        #   strict_regression — the stronger p_max <  p_xhigh (quality actually drops)
+        # strict_regression implies flag; the two are worded differently downstream.
+        ot_flag = ot_strict = False
         dmax, dxh = pooled.get((cls, "max")), pooled.get((cls, "xhigh"))
         if dmax and dxh and dmax["n"] and dxh["n"]:
             m_max = statistics.median(dmax["out"]) if dmax["out"] else 0
             m_xh = statistics.median(dxh["out"]) if dxh["out"] else 0
-            overthinking = bool((dmax["k"] / dmax["n"]) <= (dxh["k"] / dxh["n"])
-                                and m_max > m_xh)
+            p_max, p_xh = dmax["k"] / dmax["n"], dxh["k"] / dxh["n"]
+            tokens_up = m_max > m_xh
+            ot_flag = bool(p_max <= p_xh and tokens_up)
+            ot_strict = bool(p_max < p_xh and tokens_up)
+        overthinking = {"flag": ot_flag, "strict_regression": ot_strict}
 
         # Mis-classed-task check: pooled low-tier pass >= 0.80 -> possibly too easy.
         misclassed = []
@@ -1261,39 +1301,48 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
         return {"inherit_xhigh": "xhigh", "uniform_high": "high",
                 "uniform_max": "max", "uniform_low": "low"}[policy]
 
+    policy_names = ["inherit_xhigh", "uniform_high", "calibrated", "uniform_max", "uniform_low"]
+    assign = {p: {tid: policy_tier_for(tid, p) for tid in task_ids} for p in policy_names}
+
+    # Honest matrix (review M3): a task is comparable only if it has data under
+    # EVERY policy's assigned tier. Otherwise per-policy token totals are summed
+    # over different task sets and are not commensurable — a policy would look
+    # cheap merely because the tasks it happens to cover are cheap. Totals, agg
+    # pass, and every bootstrap stat are therefore computed over this fixed
+    # intersection; tasks missing any policy's cell are dropped and reported.
+    comparable_tasks = [tid for tid in task_ids
+                        if all(cell_out_vals.get((tid, assign[p][tid]))
+                               for p in policy_names)]
+    dropped_tasks = [tid for tid in task_ids if tid not in comparable_tasks]
+    incomplete_matrix = bool(dropped_tasks)
+
     def policy_tokens(tid_to_tier, cells_out):
         total = 0.0
-        incomplete = False
-        for tid in task_ids:
+        for tid in comparable_tasks:
             vals = cells_out.get((tid, tid_to_tier[tid]))
-            if not vals:
-                incomplete = True
-                continue
-            total += sum(vals) / len(vals)
-        return total, incomplete
+            if vals:
+                total += sum(vals) / len(vals)
+        return total
 
     def policy_pass(tid_to_tier, cells_pass):
         vals_mean = []
-        for tid in task_ids:
+        for tid in comparable_tasks:
             v = cells_pass.get((tid, tid_to_tier[tid]))
             if v:
                 vals_mean.append(sum(v) / len(v))
         return (sum(vals_mean) / len(vals_mean)) if vals_mean else None
 
     policies = {}
-    policy_names = ["inherit_xhigh", "uniform_high", "calibrated", "uniform_max", "uniform_low"]
-    assign = {p: {tid: policy_tier_for(tid, p) for tid in task_ids} for p in policy_names}
     for p in policy_names:
-        tok, incomplete = policy_tokens(assign[p], cell_out_vals)
-        pr = policy_pass(assign[p], cell_pass_vals)
-        policies[p] = {"tiers": assign[p], "out_tokens": tok,
-                       "agg_pass": pr, "incomplete": incomplete}
+        policies[p] = {"tiers": assign[p],
+                       "out_tokens": policy_tokens(assign[p], cell_out_vals),
+                       "agg_pass": policy_pass(assign[p], cell_pass_vals)}
 
     # Bootstrap CIs on savings % (token) vs the two baselines, seeded.
     def savings_stat(baseline):
         def stat(cells):
-            tb, ib = policy_tokens(assign[baseline], cells)
-            tc, ic = policy_tokens(assign["calibrated"], cells)
+            tb = policy_tokens(assign[baseline], cells)
+            tc = policy_tokens(assign["calibrated"], cells)
             if tb <= 0:
                 return None
             return (tb - tc) / tb * 100.0
@@ -1325,7 +1374,10 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
     save_xhigh_ok = sv_inherit[1] is not None and sv_inherit[1] > 0
     save_high_ok = sv_high[1] is not None and sv_high[1] > 0
     gain_low_ok = pd_low[1] is not None and pd_low[1] > 0
-    undominated = bool(save_xhigh_ok and save_high_ok and ni_agg and gain_low_ok)
+    # An incomplete matrix cannot support a Pareto verdict: leave it null rather
+    # than assert a false true/false from a partial task set (review M3).
+    undominated = (None if incomplete_matrix
+                   else bool(save_xhigh_ok and save_high_ok and ni_agg and gain_low_ok))
 
     seeds = {g.get("seed", seed) for g in graded}
     scales = {g.get("scale", "?") for g in graded}
@@ -1363,6 +1415,9 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
             "aggregate_pass_diff_vs_uniform_high": {"point": pd_high[0],
                                                     "ci95": [pd_high[1], pd_high[2]]},
             "noninferior_agg": bool(ni_agg),
+            "incomplete_matrix": incomplete_matrix,
+            "dropped_tasks": dropped_tasks,
+            "comparable_task_count": len(comparable_tasks),
             "undominated": undominated,
         },
     }
@@ -1377,18 +1432,69 @@ def _policy_block(pc: dict) -> dict:
         "quality_gain_vs_uniform_low": pc["quality_gain_vs_uniform_low"],
         "aggregate_pass_calibrated": pc["aggregate_pass_calibrated"],
         "noninferior_agg": pc["noninferior_agg"],
+        "incomplete_matrix": pc.get("incomplete_matrix", False),
         "undominated": pc["undominated"],
     }
 
 
-def build_calibration(analysis: dict, tasks: dict) -> dict:
+def _is_mock_manifest(manifest: dict) -> bool:
+    """Mock runs stamp cli_version="mock" (cmd_run / cmd_validate); a real run
+    never does. This is the manifest-level record of run.mock=True."""
+    return "mock" in list(manifest.get("cli_version") or [])
+
+
+def build_provenance(manifest: dict, fitted_from: str, runs: int | None = None) -> dict:
+    """Stamp where a calibration table came from (review H1). `fitted_from` is
+    "analysis" for a fresh fit or "refit" for a guarded refit."""
+    clis = list(manifest.get("cli_version") or [])
+    models = list(manifest.get("model") or [])
+    graded = int(manifest.get("n_graded", 0) or 0)
+    return {
+        "mode": "mock" if _is_mock_manifest(manifest) else "real",
+        "model": models[0] if models else MODEL,
+        "cli_version": clis[0] if clis else "unknown",
+        "runs": int(runs) if runs is not None else graded,
+        "graded": graded,
+        "fitted_from": fitted_from,
+    }
+
+
+def build_calibration_warnings(per_class: dict, mode: str) -> list:
+    """Sanity guard (review H1): a real fit in which every class's quality ceiling
+    is a perfect 1.0 AND a *hard* class collapses to `low` is almost certainly
+    resting on tasks too easy for their class. Keep the fit, but surface the caveat
+    — sourced from the misclassed_tasks field — so the ceiling-referenced rule is
+    not trusted blindly."""
+    warnings = []
+    if mode != "real":
+        return warnings
+    ceilings = [info.get("pass_rate_ref", 0.0) for info in per_class.values()]
+    if not (ceilings and all(abs(c - 1.0) < 1e-9 for c in ceilings)):
+        return warnings
+    for cls, info in per_class.items():
+        if ("hard" in cls.lower() and info.get("recommended_tier") == "low"
+                and info.get("misclassed_tasks")):
+            warnings.append(f"class {cls} fit rests on tasks flagged misclassed")
+    return warnings
+
+
+def _overthinking_flag(ot) -> bool:
+    """Read the pre-registered (<=) overthinking flag from either the new
+    {flag, strict_regression} dict or the legacy bare bool (review M4 back-compat)."""
+    return bool(ot.get("flag")) if isinstance(ot, dict) else bool(ot)
+
+
+def build_calibration(analysis: dict, tasks: dict, runs: int | None = None) -> dict:
     per_class = analysis["per_class"]
     pc = analysis["policy_comparison"]
+    manifest = analysis["manifest"]
+    prov = build_provenance(manifest, "analysis", runs=runs)
+    mock = prov["mode"] == "mock"
     classes = {}
     for cls, info in per_class.items():
         rec = info["recommended_tier"]
         classes[cls] = {
-            "recommended_tier": rec, "tier": rec,
+            "recommended_tier": rec,
             "confidence": info["confidence"],
             "n_graded": info["n_graded_recommended"],
             "fitted": True,
@@ -1398,18 +1504,26 @@ def build_calibration(analysis: dict, tasks: dict) -> dict:
             "delta_vs_ref": info["delta_vs_ref"],
             "median_out_tokens": info["median_out_recommended"],
             "equivalence_low": info["equivalence_low"],
-            "overthinking": info["overthinking"],
+            # Kept as the legacy <= flag bool for any external reader (review M4).
+            "overthinking": _overthinking_flag(info["overthinking"]),
         }
-    return {
-        "version": 1,
-        "fitted_date": _dt.date.today().isoformat(),
-        "model": (analysis["manifest"]["model"] or [MODEL])[0]
-                 if analysis["manifest"]["model"] else MODEL,
+    out = {
+        # Mock never earns a proven table: version 0 / proven false regardless of
+        # anything else (review H1). Real fits stamp version >= 1 / proven true.
+        "version": 0 if mock else 1,
+        "proven": (not mock),
+        "provenance": prov,
+        "fitted_date": None if mock else _dt.date.today().isoformat(),
+        "model": (manifest["model"] or [MODEL])[0] if manifest["model"] else MODEL,
         "suite_version": "pilot-12",
         "margin_delta": DELTA,
         "classes": classes,
         "policy": _policy_block(pc),
     }
+    warnings = build_calibration_warnings(per_class, prov["mode"])
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 def cmd_analyze(args) -> int:
@@ -1423,17 +1537,18 @@ def cmd_analyze(args) -> int:
         print("[analyze] no graded records; run grade first.")
         return 1
     # Analyze over one graded record per cell.
+    raw_graded_count = len(graded)
     graded = list(latest_by_key(graded).values())
     seed = graded[0].get("seed", SEED_DEFAULT)
     analysis = analyze_core(tasks, graded, seed)
     atomic_write_json(paths.analysis, analysis)
-    calibration = build_calibration(analysis, tasks)
+    calibration = build_calibration(analysis, tasks, runs=raw_graded_count)
     atomic_write_json(paths.calibration, calibration)
 
     print(f"[analyze] {analysis['manifest']['n_graded']} cells over "
           f"{len(analysis['manifest']['classes'])} classes")
     for cls, info in analysis["per_class"].items():
-        ot = " overthinking" if info["overthinking"] else ""
+        ot = " overthinking" if _overthinking_flag(info["overthinking"]) else ""
         print(f"[analyze]   {cls}: rec={info['recommended_tier']} "
               f"({info['confidence']}) ceiling={info['ceiling_tier']} "
               f"delta_vs_ref={info['delta_vs_ref']:+.3f}{ot}")
@@ -1530,8 +1645,12 @@ def render_report(analysis: dict, tasks: dict) -> str:
             extra.append(f"ceiling tier is {info['ceiling_tier']} (not max)")
         if info.get("equivalence_low") is True:
             extra.append("low is statistically equivalent to ceiling (TOST)")
-        if info.get("overthinking"):
-            extra.append("overthinking tail at max")
+        ot = info.get("overthinking") or {}
+        if _overthinking_flag(ot):
+            if isinstance(ot, dict) and ot.get("strict_regression"):
+                extra.append("quality regression at max")
+            else:
+                extra.append("saturated: max buys no quality at higher cost")
         suffix = ("; " + "; ".join(extra)) if extra else ""
         L.append(f"Recommended: **{rec}** (confidence: {info['confidence']}, "
                  f"delta vs ceiling: {info['delta_vs_ref']:+.3f}{suffix})")
@@ -1555,8 +1674,10 @@ def render_report(analysis: dict, tasks: dict) -> str:
         flags = []
         if info.get("equivalence_low") is True:
             flags.append("equiv")
-        if info.get("overthinking"):
-            flags.append("overthink")
+        ot = info.get("overthinking") or {}
+        if _overthinking_flag(ot):
+            flags.append("regress" if (isinstance(ot, dict) and ot.get("strict_regression"))
+                         else "saturate")
         L.append(f"{cls:<24} {rec:<7} {info['confidence']:<14} "
                  f"{ti.get('n', 0):>3} {ti.get('pass_rate', 0)*100:5.0f}% "
                  f"{info['ceiling_tier']:>5} {info['pass_rate_ref']*100:5.0f}% "
@@ -1577,7 +1698,8 @@ def render_report(analysis: dict, tasks: dict) -> str:
              + (f" (tested: {', '.join(tested)})" if tested else "") + ".")
     L.append("- H2 (hard classes: saturating gains): descriptive — see the per-class "
              "curves; a recommended tier below the ceiling indicates saturation.")
-    ot = [c for c in m["classes"] if analysis["per_class"][c].get("overthinking")]
+    ot = [c for c in m["classes"]
+          if _overthinking_flag(analysis["per_class"][c].get("overthinking"))]
     L.append("- H3 (overthinking tail at max): "
              + (f"flagged for {', '.join(ot)}" if ot else "not observed") + ".")
     L.append("")
@@ -1621,8 +1743,20 @@ def render_report(analysis: dict, tasks: dict) -> str:
              f"(diff {ipt}pp, 95% CI [{ilo}, {ihi}]pp; non-inferior at "
              f"delta_agg={DELTA_AGG}: {'yes' if pc['noninferior_agg'] else 'no'}).")
     L.append("")
-    verdict = ("UN-DOMINATED — calibrated wins" if pc["undominated"]
-               else "NOT un-dominated — at least one leg fails at this power")
+    if pc.get("incomplete_matrix"):
+        dropped = pc.get("dropped_tasks", [])
+        L.append("> **INCOMPLETE MATRIX** — the policy comparison is restricted to the "
+                 f"{pc.get('comparable_task_count', 0)} task(s) with data under every "
+                 "policy" + (f"; dropped: {', '.join(dropped)}" if dropped else "")
+                 + ". Token totals below cover only those tasks, and the Pareto verdict "
+                 "is indeterminate until the missing cells run.")
+        L.append("")
+    if pc["undominated"] is None:
+        verdict = "INDETERMINATE — incomplete matrix (see banner above)"
+    elif pc["undominated"]:
+        verdict = "UN-DOMINATED — calibrated wins"
+    else:
+        verdict = "NOT un-dominated — at least one leg fails at this power"
     L.append(f"**Pareto verdict: {verdict}.** Victory requires token savings vs both "
              "high-effort baselines (CI excludes 0) at non-inferior aggregate quality, "
              "AND a strictly positive quality gain over uniform-low.")
@@ -1659,7 +1793,8 @@ def render_report(analysis: dict, tasks: dict) -> str:
     L.append("- **Adaptive thinking is a constant background factor** — it "
              "self-regulates within every tier and cannot be disabled on Opus 4.8, so "
              "measured tier effects are net of it, not independent of it.")
-    ot_threat = [c for c in m["classes"] if analysis["per_class"][c].get("overthinking")]
+    ot_threat = [c for c in m["classes"]
+                 if _overthinking_flag(analysis["per_class"][c].get("overthinking"))]
     if ot_threat:
         L.append(f"- **Overthinking tail (H3)** flagged for {', '.join(ot_threat)}: "
                  "`max` spends more tokens without beating `xhigh` on pass rate, so the "
@@ -1824,7 +1959,7 @@ def cmd_calibrate(args) -> int:
               f"delta={pr - prref:+.2f} <= {DELTA}) {reason}")
 
         new_classes[cls] = {
-            "recommended_tier": proposed, "tier": proposed,
+            "recommended_tier": proposed,
             "confidence": info["confidence"],
             "n": eff_n(proposed), "n_graded": eff_n(proposed),
             "fitted": proposed != cur_tier,
@@ -1832,16 +1967,22 @@ def cmd_calibrate(args) -> int:
             "pass_rate_ref": prref, "delta_vs_ref": pr - prref,
             "median_out_tokens": rec_info.get("median_out", 0),
             "equivalence_low": info.get("equivalence_low"),
-            "overthinking": info.get("overthinking", False),
+            "overthinking": _overthinking_flag(info.get("overthinking", False)),
         }
 
     pc = analysis["policy_comparison"]
     policy = _policy_block(pc)
     policy["note"] = ("policy block reflects the analyze-time recommendation; guarded "
                       "single-step tier moves may lag the NI-optimal tier")
+    prov = build_provenance(analysis["manifest"], "refit")
+    mock = prov["mode"] == "mock"
     out = {
-        "version": 1,
-        "fitted_date": _dt.date.today().isoformat(),
+        # Same provenance discipline as a fresh fit (review H1): a refit off mock
+        # data is version 0 / proven false; a real refit is version >= 1 / proven true.
+        "version": 0 if mock else 1,
+        "proven": (not mock),
+        "provenance": prov,
+        "fitted_date": None if mock else _dt.date.today().isoformat(),
         "model": (analysis["manifest"]["model"] or [MODEL])[0]
                  if analysis["manifest"]["model"] else MODEL,
         "suite_version": "pilot-12",
@@ -1852,6 +1993,9 @@ def cmd_calibrate(args) -> int:
         "classes": new_classes,
         "policy": policy,
     }
+    warnings = build_calibration_warnings(per_class, prov["mode"])
+    if warnings:
+        out["warnings"] = warnings
     atomic_write_json(paths.calibration, out)
     print(f"[calibrate] {moved} class(es) moved; wrote "
           f"{os.path.relpath(paths.calibration, paths.root)}")
@@ -2121,6 +2265,12 @@ def cmd_selftest(args) -> int:
         cmd_analyze(ns)
         check(os.path.exists(paths.analysis), "analysis.json written")
         check(os.path.exists(paths.calibration), "calibration.json written")
+        cal0 = load_json(paths.calibration)
+        check(cal0["provenance"]["mode"] == "mock" and cal0["version"] == 0
+              and cal0["proven"] is False and cal0["fitted_date"] is None,
+              "mock analyze stamped provenance.mode=mock, version=0, proven=false (review H1)")
+        check("tier" not in next(iter(cal0["classes"].values())),
+              "calibration class has no duplicate tier key (review L5)")
         analysis = load_json(paths.analysis)
         for cls, info in analysis["per_class"].items():
             check(info["recommended_tier"] in TIERS,
@@ -2142,6 +2292,13 @@ def cmd_selftest(args) -> int:
         check(pcmp["savings_pct_vs_inherit_xhigh"]["point"] is not None,
               "savings point estimate present")
         check(isinstance(pcmp["undominated"], bool), "Pareto undominated verdict is bool")
+        check(pcmp.get("incomplete_matrix") is False,
+              "pilot mock matrix complete (incomplete_matrix false, review M3)")
+        for cls, info in analysis["per_class"].items():
+            ot = info["overthinking"]
+            check(isinstance(ot, dict) and set(ot) == {"flag", "strict_regression"}
+                  and isinstance(ot["flag"], bool) and isinstance(ot["strict_regression"], bool),
+                  f"{cls} overthinking split into flag+strict_regression bools (review M4)")
 
         print("[selftest] 6. report")
         cmd_report(ns)
@@ -2169,8 +2326,13 @@ def cmd_selftest(args) -> int:
         cal = load_json(paths.calibration)
         check(set(cal["classes"].keys()) == {t["class"] for t in tasks},
               "calibration covers all classes")
-        check(all(c["tier"] in TIERS for c in cal["classes"].values()),
+        check(all(c["recommended_tier"] in TIERS for c in cal["classes"].values()),
               "all calibrated tiers valid")
+        check("tier" not in next(iter(cal["classes"].values())),
+              "no duplicate tier/recommended_tier key (review L5)")
+        check(cal["provenance"]["mode"] == "mock" and cal["version"] == 0
+              and cal["proven"] is False,
+              "mock refit stamped provenance.mode=mock, version=0, proven=false (review H1)")
         check(cal["refit"]["dispatch_consumed"] == 1 and cal["refit"]["dispatch_skipped"] == 1,
               "dispatch-log: 1 consumed (effortmine), 1 skipped (hook agent_type only)")
 

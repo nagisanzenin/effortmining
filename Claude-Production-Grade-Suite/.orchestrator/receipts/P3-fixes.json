@@ -1,0 +1,24 @@
+{
+  "task_id": "P3-fixes",
+  "agent": "software-engineer",
+  "status": "complete",
+  "artifacts": [
+    "bench/effort.py",
+    "tests/test_effort.py",
+    "hooks/hooks.json",
+    "skills/effort-bench/SKILL.md"
+  ],
+  "metrics": {
+    "findings_fixed": 10,
+    "findings_skipped": 4,
+    "tests": 80,
+    "tests_new": 19,
+    "tests_baseline": 61
+  },
+  "effort": {
+    "files_read": 8,
+    "files_written": 5,
+    "tool_calls": 42
+  },
+  "notes": "Fixed H1,M1,M3,M4,L1,L2,L4,L5,L6,L9. Skipped (per instruction): M2 (runtime refit from dispatch logs — de-scoped for 0.2.0, docs owner removing the claim), L3/L7/L8 (spec-faithful as-is). Oracles all green: unittest 80/80 OK, `effort.py selftest` ALL INVARIANTS HELD, validate_oracles ALL ORACLES VALID. Mock e2e (validate/run/grade/analyze/report/calibrate in a scratch root): analyze-path AND refit-path calibration.json both carry provenance.mode=mock, version=0, proven=false, fitted_date=null; SessionStart hook now honestly prints 'pre-pilot defaults, unproven' for a mock table (previously a mock table stamped version:1+today masked as 'fitted DATE'). Real-mode fit stamps version>=1/proven:true and, on the perfect-ceiling+hard-class-low degenerate case, keeps the fit and attaches warnings=['class T4-hard-reasoning fit rests on tasks flagged misclassed']. L5: canonical calibration key is recommended_tier (the effortmine skill + cmd_calibrate's prior-read consume it); the redundant duplicate 'tier' key removed from both analyze and refit output; selftest + tests updated to read recommended_tier. M4: analysis.per_class.overthinking is now {flag,strict_regression}; calibration.json keeps the legacy <= flag bool for back-compat (no runtime consumer reads it). M3: undominated is null on an incomplete matrix and report() prints an INCOMPLETE MATRIX banner. L6: verified regex alternation is supported by the repo's own SessionStart matcher (startup|resume|clear); used matcher 'Task|Agent'. NOTE for team-lead: committed bench/state/calibration.json still shows the pre-fix schema (has 'tier', overthinking bool, no provenance) and version:1 fitted from the placeholder pilot — it regenerates with the new schema when you re-run analyze on the real 180-run results post-merge; I did not hand-edit it (state is yours to regenerate)."
+}
