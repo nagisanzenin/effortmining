@@ -662,7 +662,8 @@ GRADER_INSTRUCTIONS = (
     "one object with this shape:\n"
     "{'criteria': [{'id': '<criterion label>', 'met': true, "
     "'evidence': '<short quote or reason>'}], "
-    "'score': <number in 0..1, the fraction of the rubric the artifact satisfies>, "
+    "'score': <number in 0..1, the fraction of the rubric the artifact satisfies; "
+    "if the rubric awards points, report points_earned / points_possible>, "
     "'pass': <true or false>}\n"
     "Use double quotes for JSON. Emit nothing except that one object."
 )
@@ -815,10 +816,22 @@ def grade_blind(task: dict, raw: str, *, grade_mock: bool, model: str,
         score = float(verdict.get("score"))
     except (TypeError, ValueError):
         score = None
+    # Scale reconciliation: the template asks for 0..1, but rubrics that speak in
+    # points can make the grader emit a raw total (e.g. 7 of 10). Accept both:
+    # a score above 1.0 is normalized by the rubric's max_score, then clamped.
+    scale = "unit"
+    if score is not None and score > 1.0:
+        max_score = float(checker.get("max_score") or 1.0)
+        if max_score > 1.0:
+            score = min(score / max_score, 1.0)
+            scale = "points-normalized"
+        else:
+            score = 1.0
+            scale = "clamped"
     passed = bool(score >= thr) if score is not None else bool(verdict.get("pass"))
     return {"pass": passed, "checker_type": "blind-grader",
             "failure_class": "none" if passed else "blind_fail",
-            "checker_detail": f"score={score} thr={thr:.3f} pass={passed}",
+            "checker_detail": f"score={score} thr={thr:.3f} pass={passed} scale={scale}",
             "grader_verdict": {"score": score, "pass": bool(verdict.get("pass")),
                                "n_criteria": len(verdict.get("criteria", []) or [])},
             **grading}
