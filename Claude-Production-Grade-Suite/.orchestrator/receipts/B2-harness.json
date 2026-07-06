@@ -10,28 +10,28 @@
     ".gitignore"
   ],
   "metrics": {
-    "loc": 1851,
-    "loc_nonblank": 1639,
-    "loc_tests": 407,
+    "loc": 2256,
+    "loc_tests": 562,
     "subcommands": 7,
-    "unit_tests": 47,
-    "tests_passing": 47,
+    "unit_tests": 60,
+    "tests_passing": 60,
     "selftest_exit": 0,
-    "oracle_validator_exit": 0
+    "oracle_validator_exit": 0,
+    "spec_revision": "R4-revised (main dd0ef19 merged)"
   },
   "effort": {
-    "files_read": 15,
-    "files_written": 5,
-    "tool_calls": 21
+    "files_read": 22,
+    "files_written": 6,
+    "tool_calls": 55
   },
   "loops": [
     {
       "id": "b2-harness-oracle",
-      "iterations": 2,
-      "ratchet": "unittest 1-fail -> 0-fail (selftest green throughout)",
+      "iterations": 3,
+      "ratchet": "v1 47/47 -> spec-rev 1-fail -> 60/60 (selftest green throughout)",
       "exit": "converged"
     }
   ],
-  "verification": "python3 -m unittest = 47/47 OK; python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0); Wilson (0/10,5/10,10/10) and Newcombe (56/70 vs 48/80 -> 0.0524,0.3339) match published values; validate_oracles.py still 34/34; .gitignore verified (calibration.json + RESULTS.md tracked, state/raw ignored); no worktree pollution (selftest/tests use tempdirs).",
-  "notes": "Single-file stdlib-only harness (Python 3.14). 7 subcommands: validate/run/grade/analyze/report/calibrate/selftest. All writes atomic (tempfile+os.replace); results.jsonl append-only + resumable; corruption-quarantining JSONL reader; env sanitization strips CLAUDE_CODE_EFFORT_LEVEL/EXTRA_BODY(effort)/MAX_OUTPUT_TOKENS/ANTHROPIC_API_KEY; model code executed ONLY in grade sandbox (python3 -I -S, resource limits, wall timeout; subprocess isolation not a jail, documented). Stats implemented in stdlib: Wilson, Newcombe method-10 diff CI, seeded stratified bootstrap, NI rule with both guards. DESIGN NOTE for QA/reviewers: at pilot n=3 (9 trials/class-cell) the Newcombe interval guard rarely clears even for identical-performing tiers (two 9/9 samples give diff_lo=-0.30 < -0.10), so calibration will usually recommend max with confidence=low and the headline savings can be negative -- this is the statistically honest, pre-registered outcome (04 Section 5.4: 'intervals are wide... not proof of parity... priority for n=5 extension'), not a harness bug. `max` is always treated as a candidate (reference is non-inferior to itself) to avoid an empty candidate set. Where the B2 brief and 04 Section 9 conflicted on file layout, followed the brief's explicit bench/state + bench/raw + gitignore directive; kept 04 Section 9.3 record schema (superset with requested/effective_effort, model, cli_version, scale). Did NOT run real `claude` generations -- QA phase owns Phase 0 + pilot spend."
+  "verification": "python3 -m unittest = 60/60 OK; python3 bench/effort.py selftest = ALL INVARIANTS HELD (exit 0); validate_oracles.py still 34/34; Wilson (0/10,5/10,10/10) and Newcombe method-10 (56/70 vs 48/80 -> 0.0524,0.3339) match published values; sample RESULTS.md renders ceiling column, H1/H2/H3 scorecard, three-baseline Pareto headline, no emoji; .gitignore verified (calibration.json tracked; state/capture, state/dispatch-log.jsonl, raw ignored); no worktree pollution (tempdirs).",
+  "notes": "REVISED per team-lead spec update (merged main dd0ef19; B1 scaffold now present). Single-file stdlib-only harness (Python 3.14), 7 subcommands. Deltas implemented: (1) results.jsonl fields bound verbatim to the R1 envelope (effort_requested/effort_effective/effort_effective_source/fidelity_ok, input_tokens/output_tokens/total_tokens, cache_*_input_tokens, total_cost_usd, model_usage); (2) Phase 0.6 effort-fidelity gate in validate -- installs a Stop-hook capture (--settings file + sidecar), joins effective effort by session_id, aborts unless requested==effective for all 5 tiers; run now records effective effort per cell, discards+retries fidelity mismatches (bounded), excludes unverified/mismatched runs from cells; run is hard-gated on Phase 0 (--force override); (3) analyze: NI reference is the empirical quality-ceiling tier (arg-max pass, not mechanically max) so an overthinking max can't lower the bar, TOST equivalence for easy classes T1/T2 (H1, confidence high(equiv)), overthinking flag (H3), RQ3 vs THREE baselines (inherit@xhigh, uniform-high, uniform-low) with Pareto un-dominated verdict; (4) calibrate tolerates B1's dual-source dispatch-log (effortmine task_class used; posttooluse-hook agent_type-only skipped+counted) and folds graded receipts into the min-N gate. HONEST-OUTCOME NOTE for QA: at pilot n=3 the Newcombe interval guard rarely clears, so calibration tends to recommend the ceiling tier at confidence=low and token-savings vs uniform-high can be negative -- the pre-registered underpowered-pilot behavior (extend undecided classes to n=5), not a bug. Did NOT run real `claude` generations -- QA phase owns Phase 0 + pilot spend. QA commands unchanged: `validate --model claude-opus-4-8` then `run --scale pilot --parallel 3` / grade / analyze / report."
 }

@@ -337,7 +337,7 @@ class ResumabilityTest(unittest.TestCase):
         err = {"task_id": "T1a", "tier": "low", "rep": 1, "api_error": True,
                "exit_status": 1}
         ok = {"task_id": "T1a", "tier": "low", "rep": 1, "api_error": False,
-              "exit_status": 0, "tokens_out": 5}
+              "exit_status": 0, "output_tokens": 5, "fidelity_ok": True}
         latest = e.latest_by_key([err, ok])
         self.assertFalse(latest[("T1a", "low", 1)]["api_error"])
 
@@ -401,6 +401,161 @@ class CalibrateGuardTest(unittest.TestCase):
     def test_step_clamped(self):
         self.assertEqual(e._step_toward("low", "low"), "low")
         self.assertEqual(e._step_toward("max", "max"), "max")
+
+
+def _graded(cls, tier, passed, out, tid=None):
+    return {"task_id": tid or (cls + "-t"), "class": cls, "tier": tier,
+            "pass": bool(passed), "output_tokens": out, "seed": 1,
+            "scale": "test", "model": "m", "cli_version": "v"}
+
+
+class AnalyzeCeilingTest(unittest.TestCase):
+    """Reference = empirical quality-ceiling tier (arg-max pass), not mechanically max."""
+
+    def test_ceiling_is_argmax_pass_and_overthinking_flagged(self):
+        cls = "T4-hard-reasoning"
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        g = []
+        counts = {"low": 3, "medium": 5, "high": 8, "xhigh": 9, "max": 6}  # /9
+        outs = {"low": 120, "medium": 400, "high": 1000, "xhigh": 2200, "max": 4500}
+        for tier, k in counts.items():
+            for i in range(9):
+                g.append(_graded(cls, tier, i < k, outs[tier]))
+        a = e.analyze_core(tasks, g, seed=1)
+        info = a["per_class"][cls]
+        # xhigh (9/9) beats max (6/9): ceiling anchors to xhigh, not the degraded max.
+        self.assertEqual(info["ceiling_tier"], "xhigh")
+        # H3: max pass <= xhigh pass AND max tokens > xhigh tokens.
+        self.assertTrue(info["overthinking"])
+
+    def test_tie_breaks_to_cheaper_tier(self):
+        cls = "T1-mechanical"
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        g = [_graded(cls, t, True, {"low": 120, "high": 1000, "max": 4500}[t])
+             for t in ("low", "high", "max") for _ in range(9)]
+        a = e.analyze_core(tasks, g, seed=1)
+        # all perfect -> ceiling ties -> cheapest present tier wins.
+        self.assertEqual(a["per_class"][cls]["ceiling_tier"], "low")
+
+
+class TOSTEquivalenceTest(unittest.TestCase):
+    def test_equivalence_confirmed_at_large_n(self):
+        cls = "T1-mechanical"  # an easy class -> TOST applies
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        g = []
+        for i in range(100):
+            g.append(_graded(cls, "low", i < 98, 120))   # 0.98
+            g.append(_graded(cls, "max", True, 4500))     # 1.00 -> ceiling
+        a = e.analyze_core(tasks, g, seed=1)
+        info = a["per_class"][cls]
+        self.assertTrue(info["equivalence_low"])          # 90% CI within +/-10pp
+        self.assertEqual(info["confidence"], "high(equiv)")
+
+    def test_hard_class_has_no_equivalence(self):
+        cls = "T4-hard-reasoning"  # not an easy class
+        tasks = {cls + "-t": {"id": cls + "-t", "class": cls}}
+        g = [_graded(cls, t, True, 100) for t in ("low", "max") for _ in range(9)]
+        a = e.analyze_core(tasks, g, seed=1)
+        self.assertIsNone(a["per_class"][cls]["equivalence_low"])
+
+
+class DispatchLogTest(unittest.TestCase):
+    KNOWN = {"T1-mechanical", "T2-simple-transform", "T3-moderate-reasoning",
+             "T4-hard-reasoning"}
+
+    def test_effortmine_record_resolves(self):
+        rec = {"source": "effortmine", "task_class": "T3-moderate-reasoning",
+               "tier": "high", "accepted": True}
+        self.assertEqual(e.normalize_dispatch_record(rec, self.KNOWN),
+                         ("T3-moderate-reasoning", "high", True))
+
+    def test_hook_record_agent_type_only_is_unresolvable(self):
+        rec = {"source": "posttooluse-hook", "agent_type": "miner-high",
+               "session_id": "x"}
+        # tier derivable from miner-high, but CLASS is not -> skip.
+        self.assertIsNone(e.normalize_dispatch_record(rec, self.KNOWN))
+
+    def test_load_counts_consumed_and_skipped(self):
+        tmp = tempfile.mkdtemp(prefix="effort-dlog-")
+        try:
+            p = os.path.join(tmp, "dispatch-log.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"source": "effortmine", "task_class": "T1-mechanical",
+                                    "tier": "low", "accepted": True}) + "\n")
+                f.write(json.dumps({"source": "effortmine", "task_class": "T1-mechanical",
+                                    "tier": "low", "accepted": False}) + "\n")
+                f.write(json.dumps({"source": "posttooluse-hook",
+                                    "agent_type": "miner-low"}) + "\n")
+            graded, consumed, skipped = e.load_dispatch_log(p, self.KNOWN)
+            self.assertEqual((consumed, skipped), (2, 1))
+            self.assertEqual(graded[("T1-mechanical", "low")], {"k": 1, "n": 2})
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_missing_log_is_safe(self):
+        graded, consumed, skipped = e.load_dispatch_log("/nonexistent/x.jsonl", self.KNOWN)
+        self.assertEqual((graded, consumed, skipped), ({}, 0, 0))
+
+
+class EffortFidelityTest(unittest.TestCase):
+    def _task(self):
+        return {"id": "T1a", "class": "T1-mechanical", "checker": {"type": "exact"}}
+
+    def test_record_valid_requires_match_and_source(self):
+        env = {"usage": {"input_tokens": 10, "output_tokens": 20}, "session_id": "s"}
+        rec = e.envelope_to_record(env, self._task(), "high", 1, scale="pilot", seed=1,
+                                   nonce="n", model="m", cli_version="v", ts_start="t",
+                                   exit_status=0, retries=0, raw_answer_path="p",
+                                   effort_effective="high", effort_effective_source="hook")
+        self.assertTrue(rec["fidelity_ok"])
+        self.assertTrue(e.record_valid(rec))
+
+    def test_downgrade_is_invalid(self):
+        env = {"usage": {}, "session_id": "s"}
+        rec = e.envelope_to_record(env, self._task(), "max", 1, scale="pilot", seed=1,
+                                   nonce="n", model="m", cli_version="v", ts_start="t",
+                                   exit_status=0, retries=0, raw_answer_path="p",
+                                   effort_effective="high", effort_effective_source="hook")
+        self.assertFalse(rec["fidelity_ok"])       # requested max != effective high
+        self.assertFalse(e.record_valid(rec))
+
+    def test_unverified_is_invalid(self):
+        env = {"usage": {}, "session_id": "s"}
+        rec = e.envelope_to_record(env, self._task(), "high", 1, scale="pilot", seed=1,
+                                   nonce="n", model="m", cli_version="v", ts_start="t",
+                                   exit_status=0, retries=0, raw_answer_path="p",
+                                   effort_effective="unverified",
+                                   effort_effective_source="unverified")
+        self.assertFalse(e.record_valid(rec))
+
+    def test_envelope_bound_field_names(self):
+        env = {"usage": {"input_tokens": 5, "output_tokens": 7,
+                         "cache_read_input_tokens": 3, "cache_creation_input_tokens": 1},
+               "total_cost_usd": 0.01, "session_id": "s", "modelUsage": {"m": {}}}
+        rec = e.envelope_to_record(env, self._task(), "low", 1, scale="pilot", seed=1,
+                                   nonce="n", model="m", cli_version="v", ts_start="t",
+                                   exit_status=0, retries=0, raw_answer_path="p",
+                                   effort_effective="low", effort_effective_source="mock")
+        for field in ("effort_requested", "effort_effective", "input_tokens",
+                      "output_tokens", "total_tokens", "cache_read_input_tokens",
+                      "cache_creation_input_tokens", "total_cost_usd", "model_usage"):
+            self.assertIn(field, rec)
+        self.assertEqual(rec["total_tokens"], 12)
+
+    def test_sidecar_join_by_session_id(self):
+        tmp = tempfile.mkdtemp(prefix="effort-side-")
+        try:
+            settings_path, sidecar = e.setup_effort_capture(tmp)
+            cfg = e.load_json(settings_path)
+            self.assertIn("Stop", cfg["hooks"])          # capture hook on Stop
+            with open(sidecar, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"session_id": "s1", "effort_level": "xhigh"}) + "\n")
+                f.write(json.dumps({"session_id": "s2", "effort_level": "low"}) + "\n")
+            self.assertEqual(e.effective_from_sidecar(sidecar, "s1"), "xhigh")
+            self.assertEqual(e.effective_from_sidecar(sidecar, "s2"), "low")
+            self.assertIsNone(e.effective_from_sidecar(sidecar, "absent"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

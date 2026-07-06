@@ -28,10 +28,13 @@ State-file map (paths are relative to --root, default = this file's directory)
 -----------------------------------------------------------------------------
   raw/results.jsonl            append-only, one record per run          (gitignored)
   raw/answers/<run_id>.txt     raw model answer text                    (gitignored)
-  state/phase0.json            Phase 0 instrument report                (gitignored)
+  state/phase0.json            Phase 0 instrument report + gate verdict (gitignored)
   state/graded.jsonl           graded outcomes, one per cell            (gitignored)
   state/analysis.json          full statistical analysis                (gitignored)
   state/calibration.json       the calibration table                    (COMMITTED)
+  state/capture/               effort-fidelity capture hook + sidecar   (gitignored)
+  state/dispatch-log.jsonl     B1 runtime dispatch receipts (dual-source, read by
+                               calibrate; created lazily by the hook)   (gitignored)
   RESULTS.md                   human-readable report                    (committed)
 
 Hard constraints honored: stdlib only; every write atomic (tempfile + os.replace);
@@ -49,6 +52,7 @@ import json
 import math
 import os
 import random
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -69,8 +73,11 @@ SEED_DEFAULT = 20260706
 PRICE_IN = 5.0 / 1_000_000      # $ / input token
 PRICE_OUT = 25.0 / 1_000_000    # $ / output token
 Z95 = 1.959963984540054         # normal quantile for a two-sided 95% interval
+Z90 = 1.6448536269514722        # normal quantile for a two-sided 90% interval (TOST)
 DELTA = 0.10                    # per-class non-inferiority margin (10 pp)
 DELTA_AGG = 0.05               # policy-aggregate non-inferiority margin (5 pp)
+DELTA_EQUIV = 0.10             # TOST equivalence margin for easy classes (10 pp)
+EASY_CLASSES = {"T1-mechanical", "T2-simple-transform"}  # H1: equivalence-tested
 RUN_TIMEOUT_S = 300            # per-run hard subprocess timeout
 BOOTSTRAP_B = 10_000          # bootstrap resamples
 MIN_N_REFIT = 9               # min graded outcomes per class-cell to move a tier
@@ -81,6 +88,7 @@ SANDBOX_AS_BYTES = 2 * 1024 ** 3  # best-effort address-space cap for the sandbo
 BACKOFF_BASE = 2.0            # exponential backoff base (seconds)
 BACKOFF_CAP = 60.0           # backoff cap (seconds)
 MAX_RETRIES = 5              # retries on transient (rate-limit / 5xx / timeout) errors
+FIDELITY_RETRIES = 2         # retries when requested != effective / unverified (04 4.6)
 
 # Per-tier output-token estimates (04 Section 3.2), used ONLY by --mock to shape
 # plausible envelopes. Real runs read tokens from the CLI envelope.
@@ -556,10 +564,13 @@ def detect_effective_effort(envelope: dict) -> str | None:
     return None
 
 
-def invoke_claude(prompt: str, tier: str, model: str, timeout_s: int, env: dict
-                  ) -> _SandboxResult:
+def invoke_claude(prompt: str, tier: str, model: str, timeout_s: int, env: dict,
+                  settings_path: str | None = None) -> _SandboxResult:
     cmd = ["claude", "-p", "--effort", tier, "--model", model,
-           "--output-format", "json", prompt]
+           "--output-format", "json"]
+    if settings_path:
+        cmd += ["--settings", settings_path]
+    cmd += [prompt]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
         return _SandboxResult(proc.returncode, proc.stdout, proc.stderr, False)
@@ -567,6 +578,61 @@ def invoke_claude(prompt: str, tier: str, model: str, timeout_s: int, env: dict
         return _SandboxResult(-1, e.stdout or "", e.stderr or "", True)
     except FileNotFoundError:
         return _SandboxResult(127, "", "claude CLI not found on PATH", False)
+
+
+# ---- Effort-fidelity capture hook (04 Section 4.6) ------------------------- #
+# Headless JSON carries no effort field, so a silent downgrade is invisible in
+# the envelope. We install a Stop hook (via a dedicated --settings file) whose
+# stdin payload carries effort.level + session_id, append it to a sidecar JSONL,
+# and join it to each run by session_id to record the EFFECTIVE effort.
+_CAPTURE_SCRIPT = r'''import json, sys, datetime
+try:
+    p = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    sys.exit(0)
+eff = None
+lvl = p.get("effort")
+if isinstance(lvl, dict):
+    eff = lvl.get("level")
+rec = {"session_id": p.get("session_id"), "effort_level": eff,
+       "ts": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+try:
+    with open(sys.argv[1], "a") as f:
+        f.write(json.dumps(rec) + "\n")
+except Exception:
+    pass
+sys.exit(0)
+'''
+
+
+def setup_effort_capture(dirpath: str) -> tuple[str, str]:
+    """Write the capture script + a --settings file that runs it on Stop.
+
+    Returns (settings_path, sidecar_path). Fail-open by design: if the hook never
+    fires, the run is recorded as `unverified` and excluded from its cell.
+    """
+    os.makedirs(dirpath, exist_ok=True)
+    script_path = os.path.join(dirpath, "capture_effort.py")
+    atomic_write_text(script_path, _CAPTURE_SCRIPT)
+    sidecar = os.path.join(dirpath, "effort-capture.jsonl")
+    cmd = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)} {shlex.quote(sidecar)}"
+    settings = {"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": cmd, "timeout": 10}]}]}}
+    settings_path = os.path.join(dirpath, "capture-settings.json")
+    atomic_write_json(settings_path, settings)
+    return settings_path, sidecar
+
+
+def effective_from_sidecar(sidecar_path: str, session_id: str) -> str | None:
+    """Return the last captured effective effort for session_id, else None."""
+    if not session_id or not os.path.exists(sidecar_path):
+        return None
+    recs, _ = read_jsonl(sidecar_path)
+    hit = None
+    for r in recs:
+        if r.get("session_id") == session_id and r.get("effort_level"):
+            hit = r["effort_level"]
+    return hit
 
 
 def _h01(*parts) -> float:
@@ -712,7 +778,10 @@ def _now() -> str:
 def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str,
                        seed: int, nonce: str, model: str, cli_version: str,
                        ts_start: str, exit_status: int, retries: int,
-                       raw_answer_path: str) -> dict:
+                       raw_answer_path: str, effort_effective: str,
+                       effort_effective_source: str) -> dict:
+    # Field names are bound verbatim to the R1-confirmed envelope (04 Section 9.3):
+    # input_tokens/output_tokens/cache_*/total_cost_usd/model_usage/session_id.
     usage = env.get("usage", {}) if isinstance(env, dict) else {}
     tin = int(usage.get("input_tokens", 0) or 0)
     tout = int(usage.get("output_tokens", 0) or 0)
@@ -722,17 +791,23 @@ def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str
     return {
         "run_id": run_id_of(task["id"], tier, rep),
         "task_id": task["id"], "class": task["class"],
-        "tier": tier, "requested_effort": tier,
-        "effective_effort": detect_effective_effort(env) or tier,
+        "tier": tier, "effort_requested": tier,
+        "effort_effective": effort_effective,
+        "effort_effective_source": effort_effective_source,
+        # requested==effective AND verified by a capture hook (04 Section 4.6);
+        # a mismatch or an unverified run does not count toward its cell.
+        "fidelity_ok": bool(effort_effective == tier
+                            and effort_effective_source in ("hook", "mock")),
         "rep": rep, "scale": scale, "seed": seed, "nonce": nonce,
         "model": model, "cli_version": cli_version,
         "ts_start": ts_start, "ts_end": _now(),
         "duration_ms": int(env.get("duration_ms", 0) or 0),
         "session_id": env.get("session_id", ""),
-        "tokens_in": tin, "tokens_out": tout, "tokens_total": tin + tout,
-        "cache_read": int(usage.get("cache_read_input_tokens", 0) or 0),
-        "cache_creation": int(usage.get("cache_creation_input_tokens", 0) or 0),
-        "cost_usd": float(cost),
+        "input_tokens": tin, "output_tokens": tout, "total_tokens": tin + tout,
+        "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens", 0) or 0),
+        "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+        "total_cost_usd": float(cost),
+        "model_usage": env.get("modelUsage", {}) if isinstance(env, dict) else {},
         "raw_answer_path": raw_answer_path,
         "exit_status": exit_status, "api_error": False, "retries": retries,
     }
@@ -740,19 +815,30 @@ def envelope_to_record(env: dict, task: dict, tier: str, rep: int, *, scale: str
 
 def error_record(task: dict, tier: str, rep: int, *, scale: str, seed: int,
                  nonce: str, model: str, cli_version: str, ts_start: str,
-                 exit_status: int, retries: int, detail: str) -> dict:
+                 exit_status: int, retries: int, detail: str,
+                 effort_effective: str = "unverified",
+                 effort_effective_source: str = "none") -> dict:
     return {
         "run_id": run_id_of(task["id"], tier, rep),
         "task_id": task["id"], "class": task["class"],
-        "tier": tier, "requested_effort": tier, "effective_effort": tier,
+        "tier": tier, "effort_requested": tier,
+        "effort_effective": effort_effective,
+        "effort_effective_source": effort_effective_source, "fidelity_ok": False,
         "rep": rep, "scale": scale, "seed": seed, "nonce": nonce,
         "model": model, "cli_version": cli_version,
         "ts_start": ts_start, "ts_end": _now(), "duration_ms": 0,
-        "session_id": "", "tokens_in": 0, "tokens_out": 0, "tokens_total": 0,
-        "cache_read": 0, "cache_creation": 0, "cost_usd": 0.0,
+        "session_id": "", "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        "total_cost_usd": 0.0, "model_usage": {},
         "raw_answer_path": "", "exit_status": exit_status,
         "api_error": True, "retries": retries, "error_detail": detail[:200],
     }
+
+
+def record_valid(rec: dict) -> bool:
+    """A run counts toward its cell iff it is non-error AND effort-fidelity-verified
+    (requested == effective, confirmed by the capture hook). 04 Sections 4.6, 5.1."""
+    return (not rec.get("api_error")) and bool(rec.get("fidelity_ok"))
 
 
 def latest_by_key(records: list[dict]) -> dict:
@@ -778,7 +864,8 @@ def latest_by_key(records: list[dict]) -> dict:
 # Subcommand: run                                                             #
 # --------------------------------------------------------------------------- #
 def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
-                 cli_version: str, env: dict, paths: Paths) -> dict:
+                 cli_version: str, env: dict, paths: Paths,
+                 settings_path: str | None = None, sidecar: str | None = None) -> dict:
     task, tier, rep = cell["task"], cell["tier"], cell["rep"]
     nonce = uuid.uuid4().hex
     prompt = f"[run-id: {nonce}]\n\n" + task["prompt_text"]
@@ -789,15 +876,18 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
         env_json = mock_envelope(task, tier, rep, seed)
         answer = env_json["result"]
         atomic_write_text(os.path.join(paths.root, rel_answer), answer)
+        # Mock simulates a successful capture: effective == requested, source=mock.
         return envelope_to_record(env_json, task, tier, rep, scale=scale, seed=seed,
                                   nonce=nonce, model=model, cli_version=cli_version,
                                   ts_start=ts_start, exit_status=0, retries=0,
-                                  raw_answer_path=rel_answer)
+                                  raw_answer_path=rel_answer, effort_effective=tier,
+                                  effort_effective_source="mock")
 
     retries = 0
+    fidelity_retries = 0
     last_detail = ""
     while True:
-        res = invoke_claude(prompt, tier, model, RUN_TIMEOUT_S, env)
+        res = invoke_claude(prompt, tier, model, RUN_TIMEOUT_S, env, settings_path)
         env_json = None
         if res.returncode == 0 and res.stdout.strip():
             try:
@@ -806,12 +896,32 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
                 env_json = None
         ok = env_json is not None and not env_json.get("is_error", False)
         if ok:
+            # Join the capture-hook sidecar by session_id to read EFFECTIVE effort.
+            session_id = env_json.get("session_id", "")
+            eff = effective_from_sidecar(sidecar, session_id) if sidecar else None
+            if eff is None:
+                eff = detect_effective_effort(env_json)
+            if eff is None:
+                effective, source = "unverified", "unverified"
+            else:
+                effective, source = eff, "hook"
+            fidelity_ok = (effective == tier and source == "hook")
+            # A downgrade or an unverified capture invalidates the run for its cell
+            # (04 4.6): discard and retry, bounded so we never burn the budget.
+            if not fidelity_ok and fidelity_retries < FIDELITY_RETRIES:
+                fidelity_retries += 1
+                last_detail = f"fidelity mismatch: requested={tier} effective={effective} src={source}"
+                time.sleep(min(BACKOFF_CAP, BACKOFF_BASE * fidelity_retries) * (0.5 + random.random()))
+                continue
             answer = env_json.get("result", "")
             atomic_write_text(os.path.join(paths.root, rel_answer), answer)
             return envelope_to_record(env_json, task, tier, rep, scale=scale, seed=seed,
                                       nonce=nonce, model=model, cli_version=cli_version,
                                       ts_start=ts_start, exit_status=res.returncode,
-                                      retries=retries, raw_answer_path=rel_answer)
+                                      retries=retries + fidelity_retries,
+                                      raw_answer_path=rel_answer,
+                                      effort_effective=effective,
+                                      effort_effective_source=source)
         # failure: decide transient vs permanent
         last_detail = (res.stderr or "") + " " + (res.stdout or "")[:200]
         transient = res.timed_out or _transient(last_detail) or (
@@ -824,7 +934,7 @@ def execute_cell(cell: dict, *, mock: bool, scale: str, seed: int, model: str,
             continue
         return error_record(task, tier, rep, scale=scale, seed=seed, nonce=nonce,
                             model=model, cli_version=cli_version, ts_start=ts_start,
-                            exit_status=res.returncode, retries=retries,
+                            exit_status=res.returncode, retries=retries + fidelity_retries,
                             detail=last_detail.strip() or "unknown failure")
 
 
@@ -839,7 +949,9 @@ def cmd_run(args) -> int:
     if bad:
         print(f"[run] quarantined {bad} corrupt line(s) in results.jsonl")
     latest = latest_by_key(prior)
-    completed = {k for k, r in latest.items() if not r.get("api_error") and r.get("exit_status") == 0}
+    # A cell is "completed" only if its latest run is fidelity-valid (non-error and
+    # requested==effective); mismatched/unverified/error runs are re-attempted.
+    completed = {k for k, r in latest.items() if record_valid(r)}
 
     # Optional: with --rerun-failed also re-run cells whose graded verdict is fail.
     rerun = set()
@@ -860,18 +972,39 @@ def cmd_run(args) -> int:
           f"parallel={args.parallel} seed={args.seed}")
     print(f"[run] matrix={len(cells)} completed={len(completed)} "
           f"rerun_failed={len(rerun)} to_run={len(todo)}")
-    if not args.mock and not os.path.exists(paths.phase0):
-        print("[run] WARNING: state/phase0.json absent — Phase 0 gate has not been "
-              "run. Run `effort.py validate` first.")
+
+    # Phase 0 is a hard gate (04 Section 4): real runs require a passed instrument
+    # gate. --force overrides (loud warning); mock never blocks.
+    if not args.mock:
+        gate_ok = False
+        if os.path.exists(paths.phase0):
+            try:
+                gate_ok = bool(load_json(paths.phase0).get("gate_passed"))
+            except (OSError, json.JSONDecodeError):
+                gate_ok = False
+        if not gate_ok:
+            if args.force:
+                print("[run] WARNING: Phase 0 gate not passed (state/phase0.json "
+                      "absent or gate_passed=false) — proceeding anyway due to --force.")
+            else:
+                print("[run] BLOCKED: Phase 0 gate not passed. Run "
+                      "`effort.py validate --model claude-opus-4-8` first, or pass "
+                      "--force to override. (04 Section 4 hard gate.)")
+                return 2
+
     if not todo:
         print("[run] nothing to do; matrix already complete.")
         return 0
 
     env, audit = build_child_env()
+    settings_path = sidecar = None
     if not args.mock:
         if audit["effort_level_override_present"]:
             print(f"[run] WARNING: {EFFORT_ENV_OVERRIDE} was set in the parent env; "
                   "stripped it for children (it overrides --effort).")
+        settings_path, sidecar = setup_effort_capture(os.path.join(paths.state, "capture"))
+        print(f"[run] effort-capture hook installed (sidecar: "
+              f"{os.path.relpath(sidecar, paths.root)})")
     cli_version = "mock" if args.mock else detect_cli_version()
 
     done = 0
@@ -880,17 +1013,22 @@ def cmd_run(args) -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(execute_cell, c, mock=args.mock, scale=args.scale,
                           seed=args.seed, model=args.model, cli_version=cli_version,
-                          env=env, paths=paths): c for c in todo}
+                          env=env, paths=paths, settings_path=settings_path,
+                          sidecar=sidecar): c for c in todo}
+        invalid = 0
         for fut in concurrent.futures.as_completed(futs):
             rec = fut.result()
             append_jsonl(paths.results, rec)
             done += 1
             if rec.get("api_error"):
                 errors += 1
+            elif not rec.get("fidelity_ok"):
+                invalid += 1  # requested != effective or unverified capture
             if done % 10 == 0 or done == len(todo):
-                print(f"[run] {done}/{len(todo)} appended ({errors} api_error)")
+                print(f"[run] {done}/{len(todo)} appended "
+                      f"({errors} api_error, {invalid} fidelity-invalid)")
     print(f"[run] complete: {done} runs appended to {os.path.relpath(paths.results, paths.root)} "
-          f"({errors} api_error)")
+          f"({errors} api_error, {invalid} fidelity-invalid — excluded from cells)")
     return 0
 
 
@@ -910,12 +1048,17 @@ def cmd_grade(args) -> int:
     prior_by_key = latest_by_key(prior_graded) if prior_graded else {}
 
     graded_out = []
-    n_pass = n_fail = n_reused = n_new = 0
+    n_pass = n_fail = n_reused = n_new = excluded_fidelity = 0
     tax = {"none": 0, "wrong_answer": 0, "parse_fail": 0, "timeout": 0, "api_error": 0}
     for key, rec in latest.items():
         if rec.get("api_error"):
             tax["api_error"] += 1
             continue  # nothing to grade; excluded from quality per 04 Section 5.1
+        if not rec.get("fidelity_ok"):
+            # requested != effective, or effective unverified: invalid for its cell
+            # (04 Section 4.6) — excluded from quality just like api_error.
+            excluded_fidelity += 1
+            continue
         task = tasks.get(rec["task_id"])
         if task is None:
             continue
@@ -954,7 +1097,7 @@ def cmd_grade(args) -> int:
     body = "".join(json.dumps(r) + "\n" for r in graded_out)
     atomic_write_text(paths.graded, body)
     print(f"[grade] graded {len(graded_out)} cells: {n_pass} pass, {n_fail} fail "
-          f"({n_new} new, {n_reused} reused)")
+          f"({n_new} new, {n_reused} reused; {excluded_fidelity} excluded: fidelity)")
     print(f"[grade] taxonomy: {tax}")
     print(f"[grade] wrote {os.path.relpath(paths.graded, paths.root)}")
     return 0
@@ -989,7 +1132,7 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
     for g in graded:
         key = (g["task_id"], g["tier"])
         cell_pass_vals.setdefault(key, []).append(1 if g["pass"] else 0)
-        cell_out_vals.setdefault(key, []).append(int(g.get("tokens_out", 0)))
+        cell_out_vals.setdefault(key, []).append(int(g.get("output_tokens", 0)))
     for key, passes in cell_pass_vals.items():
         n = len(passes)
         k = sum(passes)
@@ -1019,22 +1162,33 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
         d = pooled.setdefault(key, {"k": 0, "n": 0, "out": []})
         d["k"] += 1 if g["pass"] else 0
         d["n"] += 1
-        d["out"].append(int(g.get("tokens_out", 0)))
+        d["out"].append(int(g.get("output_tokens", 0)))
+
+    def pooled_pass(cls, tier):
+        d = pooled.get((cls, tier))
+        return (d["k"] / d["n"]) if d and d["n"] else 0.0
 
     per_class = {}
     for cls in classes:
-        pmax = pooled.get((cls, "max"))
-        k_max = pmax["k"] if pmax else 0
-        n_max = pmax["n"] if pmax else 0
+        # Reference = empirical quality-ceiling tier: arg-max pooled pass rate,
+        # ties -> cheaper (lower-index) tier. Per H3 this may be xhigh, not max, so
+        # we never anchor non-inferiority to a possibly-degraded max (04 Section 5.4).
+        present = [t for t in TIERS if pooled.get((cls, t))]
+        ref_tier = (max(present, key=lambda t: (pooled_pass(cls, t), -TIER_INDEX[t]))
+                    if present else "max")
+        dref = pooled.get((cls, ref_tier))
+        k_ref = dref["k"] if dref else 0
+        n_ref = dref["n"] if dref else 0
+
         tiers_info = {}
-        candidates = []  # (median_out, total_out, tier)
+        candidates = []  # (median_out, total_out, tier_index, tier)
         for tier in TIERS:
             d = pooled.get((cls, tier))
             if not d:
                 continue
             k, n = d["k"], d["n"]
             lo, hi = wilson_interval(k, n)
-            ni = noninferiority(k, n, k_max, n_max)
+            ni = noninferiority(k, n, k_ref, n_ref)
             med_out = statistics.median(d["out"]) if d["out"] else 0
             tot_out = sum(d["out"])
             tiers_info[tier] = {
@@ -1044,12 +1198,12 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
                 "diff_lo": ni["diff_lo"], "diff_hi": ni["diff_hi"],
                 "noninferior": ni["noninferior"],
             }
-            # `max` is non-inferior to itself by definition (the reference is always
-            # a candidate); other tiers must clear both guards. This guarantees a
-            # non-empty candidate set even when small-n intervals never clear.
-            if tier == "max" or ni["noninferior"]:
+            # The reference tier is non-inferior to itself by definition (always a
+            # candidate); other tiers must clear both guards. Guarantees a non-empty
+            # candidate set even when small-n intervals never clear.
+            if tier == ref_tier or ni["noninferior"]:
                 candidates.append((med_out, tot_out, TIER_INDEX[tier], tier))
-        recommended = min(candidates)[3] if candidates else "max"
+        recommended = min(candidates)[3] if candidates else ref_tier
         # Confidence: high only if the recommendation rests on real interval
         # evidence and no strictly-cheaper tier is point-OK-but-interval-ambiguous.
         rec_info = tiers_info.get(recommended, {})
@@ -1058,6 +1212,26 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
             for tier, info in tiers_info.items()
             if TIER_INDEX[tier] < TIER_INDEX[recommended])
         confidence = "high" if (rec_info.get("interval_ok") and not cheaper_ambiguous) else "low"
+
+        # H1 (easy classes): TOST equivalence of `low` vs the ceiling. `low` is
+        # equivalent iff the 90% Newcombe CI of (p_low - p_ref) lies entirely within
+        # [-DELTA_EQUIV, +DELTA_EQUIV]; passing upgrades confidence to high(equiv).
+        equivalence_low = None
+        dlow = pooled.get((cls, "low"))
+        if cls in EASY_CLASSES and dlow and n_ref:
+            lo90, hi90 = newcombe_diff_ci(dlow["k"], dlow["n"], k_ref, n_ref, Z90)
+            equivalence_low = bool(lo90 >= -DELTA_EQUIV and hi90 <= DELTA_EQUIV)
+            if equivalence_low:
+                confidence = "high(equiv)"
+
+        # H3 overthinking flag: max pass <= xhigh pass AND max tokens > xhigh tokens.
+        overthinking = False
+        dmax, dxh = pooled.get((cls, "max")), pooled.get((cls, "xhigh"))
+        if dmax and dxh and dmax["n"] and dxh["n"]:
+            m_max = statistics.median(dmax["out"]) if dmax["out"] else 0
+            m_xh = statistics.median(dxh["out"]) if dxh["out"] else 0
+            overthinking = bool((dmax["k"] / dmax["n"]) <= (dxh["k"] / dxh["n"])
+                                and m_max > m_xh)
 
         # Mis-classed-task check: pooled low-tier pass >= 0.80 -> possibly too easy.
         misclassed = []
@@ -1070,11 +1244,13 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
 
         per_class[cls] = {
             "recommended_tier": recommended, "confidence": confidence,
-            "pass_rate_max": (k_max / n_max) if n_max else 0.0,
+            "ceiling_tier": ref_tier,
+            "pass_rate_ref": (k_ref / n_ref) if n_ref else 0.0,
             "n_graded_recommended": tiers_info.get(recommended, {}).get("n", 0),
-            "delta_vs_max": (tiers_info.get(recommended, {}).get("pass_rate", 0.0)
-                             - ((k_max / n_max) if n_max else 0.0)),
+            "delta_vs_ref": (tiers_info.get(recommended, {}).get("pass_rate", 0.0)
+                             - ((k_ref / n_ref) if n_ref else 0.0)),
             "median_out_recommended": tiers_info.get(recommended, {}).get("median_out", 0),
+            "equivalence_low": equivalence_low, "overthinking": overthinking,
             "tiers": tiers_info, "misclassed_tasks": misclassed,
         }
 
@@ -1126,19 +1302,30 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
     sv_inherit = bootstrap_ci(cell_out_vals, savings_stat("inherit_xhigh"), seed=seed)
     sv_high = bootstrap_ci(cell_out_vals, savings_stat("uniform_high"), seed=seed)
 
-    # Aggregate pass-rate difference CI (calibrated - inherit_xhigh), bootstrap on
-    # pass bools within cells; non-inferior at DELTA_AGG if lower bound >= -0.05.
-    def passdiff_stat(cells):
-        pc = policy_pass(assign["calibrated"], cells)
-        pi = policy_pass(assign["inherit_xhigh"], cells)
-        if pc is None or pi is None:
-            return None
-        return pc - pi
-    pass_diff = bootstrap_ci(cell_pass_vals, passdiff_stat, seed=seed)
+    # Aggregate pass-rate difference CIs (calibrated - baseline), bootstrap on pass
+    # bools within cells; non-inferior at DELTA_AGG if the lower bound >= -0.05.
+    def passdiff_stat(baseline):
+        def stat(cells):
+            pc = policy_pass(assign["calibrated"], cells)
+            pb = policy_pass(assign[baseline], cells)
+            if pc is None or pb is None:
+                return None
+            return pc - pb
+        return stat
 
-    agg_cal = policies["calibrated"]["agg_pass"]
-    agg_inh = policies["inherit_xhigh"]["agg_pass"]
-    noninferior_agg = (pass_diff[1] is not None and pass_diff[1] >= -DELTA_AGG)
+    pd_inherit = bootstrap_ci(cell_pass_vals, passdiff_stat("inherit_xhigh"), seed=seed)
+    pd_high = bootstrap_ci(cell_pass_vals, passdiff_stat("uniform_high"), seed=seed)
+    pd_low = bootstrap_ci(cell_pass_vals, passdiff_stat("uniform_low"), seed=seed)
+
+    # RQ3 Pareto victory (04 Section 5.5): calibrated is un-dominated by all three
+    # baselines iff it saves tokens (CI excludes 0) at non-inferior quality vs
+    # inherit@xhigh and uniform-high, AND strictly beats uniform-low on quality.
+    ni_agg = (pd_inherit[1] is not None and pd_inherit[1] >= -DELTA_AGG
+              and pd_high[1] is not None and pd_high[1] >= -DELTA_AGG)
+    save_xhigh_ok = sv_inherit[1] is not None and sv_inherit[1] > 0
+    save_high_ok = sv_high[1] is not None and sv_high[1] > 0
+    gain_low_ok = pd_low[1] is not None and pd_low[1] > 0
+    undominated = bool(save_xhigh_ok and save_high_ok and ni_agg and gain_low_ok)
 
     seeds = {g.get("seed", seed) for g in graded}
     scales = {g.get("scale", "?") for g in graded}
@@ -1149,6 +1336,7 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
         "cli_version": sorted(clis), "seed": sorted(seeds), "scale": sorted(scales),
         "classes": classes, "tiers_present": tiers_present,
         "n_graded": len(graded), "delta": DELTA, "delta_agg": DELTA_AGG,
+        "delta_equiv": DELTA_EQUIV, "easy_classes": sorted(EASY_CLASSES),
         "bootstrap_resamples": BOOTSTRAP_B,
     }
 
@@ -1158,17 +1346,38 @@ def analyze_core(tasks: dict, graded: list[dict], seed: int) -> dict:
         "per_class": per_class,
         "policies": policies,
         "policy_comparison": {
-            "baseline_inherit_tier": "xhigh",
+            "baselines": {"inherit_xhigh": "xhigh", "uniform_high": "high",
+                          "uniform_low": "low"},
             "savings_pct_vs_inherit_xhigh": {"point": sv_inherit[0],
                                              "ci95": [sv_inherit[1], sv_inherit[2]]},
             "savings_pct_vs_uniform_high": {"point": sv_high[0],
                                             "ci95": [sv_high[1], sv_high[2]]},
-            "aggregate_pass_calibrated": agg_cal,
-            "aggregate_pass_inherit_xhigh": agg_inh,
-            "aggregate_pass_diff": {"point": pass_diff[0],
-                                    "ci95": [pass_diff[1], pass_diff[2]]},
-            "noninferior_agg": noninferior_agg,
+            "quality_gain_vs_uniform_low": {"point": pd_low[0],
+                                            "ci95": [pd_low[1], pd_low[2]]},
+            "aggregate_pass_calibrated": policies["calibrated"]["agg_pass"],
+            "aggregate_pass_inherit_xhigh": policies["inherit_xhigh"]["agg_pass"],
+            "aggregate_pass_uniform_high": policies["uniform_high"]["agg_pass"],
+            "aggregate_pass_uniform_low": policies["uniform_low"]["agg_pass"],
+            "aggregate_pass_diff_vs_inherit_xhigh": {"point": pd_inherit[0],
+                                                     "ci95": [pd_inherit[1], pd_inherit[2]]},
+            "aggregate_pass_diff_vs_uniform_high": {"point": pd_high[0],
+                                                    "ci95": [pd_high[1], pd_high[2]]},
+            "noninferior_agg": bool(ni_agg),
+            "undominated": undominated,
         },
+    }
+
+
+def _policy_block(pc: dict) -> dict:
+    """The calibration.json `policy` block (04 Section 7.1), from analysis."""
+    return {
+        "baselines": pc["baselines"],
+        "savings_pct_vs_inherit_xhigh": pc["savings_pct_vs_inherit_xhigh"],
+        "savings_pct_vs_uniform_high": pc["savings_pct_vs_uniform_high"],
+        "quality_gain_vs_uniform_low": pc["quality_gain_vs_uniform_low"],
+        "aggregate_pass_calibrated": pc["aggregate_pass_calibrated"],
+        "noninferior_agg": pc["noninferior_agg"],
+        "undominated": pc["undominated"],
     }
 
 
@@ -1184,9 +1393,12 @@ def build_calibration(analysis: dict, tasks: dict) -> dict:
             "n_graded": info["n_graded_recommended"],
             "fitted": True,
             "pass_rate": info["tiers"].get(rec, {}).get("pass_rate", 0.0),
-            "pass_rate_max": info["pass_rate_max"],
-            "delta_vs_max": info["delta_vs_max"],
+            "ceiling_tier": info["ceiling_tier"],
+            "pass_rate_ref": info["pass_rate_ref"],
+            "delta_vs_ref": info["delta_vs_ref"],
             "median_out_tokens": info["median_out_recommended"],
+            "equivalence_low": info["equivalence_low"],
+            "overthinking": info["overthinking"],
         }
     return {
         "version": 1,
@@ -1196,14 +1408,7 @@ def build_calibration(analysis: dict, tasks: dict) -> dict:
         "suite_version": "pilot-12",
         "margin_delta": DELTA,
         "classes": classes,
-        "policy": {
-            "baseline_inherit_tier": pc["baseline_inherit_tier"],
-            "savings_pct_vs_inherit_xhigh": pc["savings_pct_vs_inherit_xhigh"],
-            "savings_pct_vs_uniform_high": pc["savings_pct_vs_uniform_high"],
-            "aggregate_pass_calibrated": pc["aggregate_pass_calibrated"],
-            "aggregate_pass_inherit_xhigh": pc["aggregate_pass_inherit_xhigh"],
-            "noninferior_agg": pc["noninferior_agg"],
-        },
+        "policy": _policy_block(pc),
     }
 
 
@@ -1228,11 +1433,16 @@ def cmd_analyze(args) -> int:
     print(f"[analyze] {analysis['manifest']['n_graded']} cells over "
           f"{len(analysis['manifest']['classes'])} classes")
     for cls, info in analysis["per_class"].items():
+        ot = " overthinking" if info["overthinking"] else ""
         print(f"[analyze]   {cls}: rec={info['recommended_tier']} "
-              f"({info['confidence']}) delta_vs_max={info['delta_vs_max']:+.3f}")
+              f"({info['confidence']}) ceiling={info['ceiling_tier']} "
+              f"delta_vs_ref={info['delta_vs_ref']:+.3f}{ot}")
     sv = analysis["policy_comparison"]["savings_pct_vs_inherit_xhigh"]
-    print(f"[analyze] savings vs inherit@xhigh: {sv['point']:.1f}% "
-          f"CI[{sv['ci95'][0]:.1f}, {sv['ci95'][1]:.1f}]")
+    pt = 0.0 if sv["point"] is None else sv["point"]
+    lo = float("nan") if sv["ci95"][0] is None else sv["ci95"][0]
+    hi = float("nan") if sv["ci95"][1] is None else sv["ci95"][1]
+    print(f"[analyze] savings vs inherit@xhigh: {pt:.1f}% CI[{lo:.1f}, {hi:.1f}]  "
+          f"undominated={analysis['policy_comparison']['undominated']}")
     print(f"[analyze] wrote {os.path.relpath(paths.analysis, paths.root)} and "
           f"{os.path.relpath(paths.calibration, paths.root)}")
     return 0
@@ -1315,8 +1525,16 @@ def render_report(analysis: dict, tasks: dict) -> str:
                      f"{ti['median_out']:>8}  {_bar(ti['pass_rate'])}")
         L.append("```")
         rec = info["recommended_tier"]
+        extra = []
+        if info.get("ceiling_tier") and info["ceiling_tier"] != "max":
+            extra.append(f"ceiling tier is {info['ceiling_tier']} (not max)")
+        if info.get("equivalence_low") is True:
+            extra.append("low is statistically equivalent to ceiling (TOST)")
+        if info.get("overthinking"):
+            extra.append("overthinking tail at max")
+        suffix = ("; " + "; ".join(extra)) if extra else ""
         L.append(f"Recommended: **{rec}** (confidence: {info['confidence']}, "
-                 f"delta vs max: {info['delta_vs_max']:+.3f})")
+                 f"delta vs ceiling: {info['delta_vs_ref']:+.3f}{suffix})")
         if info["misclassed_tasks"]:
             names = ", ".join(f"{x['task_id']} (low pass {x['low_pass']*100:.0f}%)"
                               for x in info["misclassed_tasks"])
@@ -1324,48 +1542,90 @@ def render_report(analysis: dict, tasks: dict) -> str:
                      f"{MISCLASS_LOW_PASS:.0%}): {names}")
         L.append("")
 
-    # 4. Calibration table
+    # 4. Calibration table + hypothesis scorecard
     L.append("## 4. Calibration table (RQ2)")
     L.append("")
     L.append("```")
-    L.append(f"{'class':<24} {'tier':<7} {'conf':<5} {'n':>3} {'pass':>6} "
-             f"{'max':>6} {'delta':>7} {'med.out':>8}")
+    L.append(f"{'class':<24} {'tier':<7} {'confidence':<14} {'n':>3} {'pass':>6} "
+             f"{'ceil':>5} {'p_ref':>6} {'delta':>7} {'med.out':>8} flags")
     for cls in m["classes"]:
         info = analysis["per_class"][cls]
         rec = info["recommended_tier"]
         ti = info["tiers"].get(rec, {})
-        L.append(f"{cls:<24} {rec:<7} {info['confidence']:<5} "
+        flags = []
+        if info.get("equivalence_low") is True:
+            flags.append("equiv")
+        if info.get("overthinking"):
+            flags.append("overthink")
+        L.append(f"{cls:<24} {rec:<7} {info['confidence']:<14} "
                  f"{ti.get('n', 0):>3} {ti.get('pass_rate', 0)*100:5.0f}% "
-                 f"{info['pass_rate_max']*100:5.0f}% {info['delta_vs_max']:+7.3f} "
-                 f"{ti.get('median_out', 0):>8}")
+                 f"{info['ceiling_tier']:>5} {info['pass_rate_ref']*100:5.0f}% "
+                 f"{info['delta_vs_ref']:+7.3f} {ti.get('median_out', 0):>8} "
+                 f"{','.join(flags)}")
     L.append("```")
+    L.append("(ceil = empirical quality-ceiling tier, arg-max pass; p_ref = its pass "
+             "rate; delta = recommended pass - ceiling pass)")
+    L.append("")
+    L.append("Hypothesis scorecard (04 Section 1.2):")
+    easy = m.get("easy_classes", [])
+    h1_conf = [c for c in m["classes"]
+               if c in easy and analysis["per_class"][c].get("equivalence_low") is True]
+    tested = [c for c in m["classes"] if c in easy]
+    L.append(f"- H1 (easy classes: low equivalent to ceiling, TOST): "
+             + (f"confirmed for {', '.join(h1_conf)}" if h1_conf
+                else "not confirmed at this power")
+             + (f" (tested: {', '.join(tested)})" if tested else "") + ".")
+    L.append("- H2 (hard classes: saturating gains): descriptive — see the per-class "
+             "curves; a recommended tier below the ceiling indicates saturation.")
+    ot = [c for c in m["classes"] if analysis["per_class"][c].get("overthinking")]
+    L.append("- H3 (overthinking tail at max): "
+             + (f"flagged for {', '.join(ot)}" if ot else "not observed") + ".")
     L.append("")
 
-    # 5. Policy headline (RQ3)
+    # 5. Policy headline (RQ3 — three-baseline Pareto A/B)
     pc = analysis["policy_comparison"]
     sv_i = pc["savings_pct_vs_inherit_xhigh"]
     sv_h = pc["savings_pct_vs_uniform_high"]
-    pdif = pc["aggregate_pass_diff"]
-    L.append("## 5. Policy headline (RQ3 — the A/B)")
+    qg_l = pc["quality_gain_vs_uniform_low"]
+    pd_i = pc["aggregate_pass_diff_vs_inherit_xhigh"]
+    L.append("## 5. Policy headline (RQ3 — three-baseline Pareto A/B)")
     L.append("")
 
-    def _ci(d):
+    def _ci_pct(d):
         c = d["ci95"]
         lo = "n/a" if c[0] is None else f"{c[0]:.1f}"
         hi = "n/a" if c[1] is None else f"{c[1]:.1f}"
         pt = "n/a" if d["point"] is None else f"{d['point']:.1f}"
         return pt, lo, hi
-    pt, lo, hi = _ci(sv_i)
-    L.append(f"- Calibrated vs **inherit@xhigh** (status-quo): "
-             f"**{pt}% fewer output tokens** (95% CI [{lo}, {hi}]).")
-    pt2, lo2, hi2 = _ci(sv_h)
-    L.append(f"- Calibrated vs **uniform-high** (model default): "
-             f"{pt2}% fewer output tokens (95% CI [{lo2}, {hi2}]).")
+
+    def _ci_pp(d):
+        c = d["ci95"]
+        lo = "n/a" if c[0] is None else f"{c[0] * 100:+.1f}"
+        hi = "n/a" if c[1] is None else f"{c[1] * 100:+.1f}"
+        pt = "n/a" if d["point"] is None else f"{d['point'] * 100:+.1f}"
+        return pt, lo, hi
+
+    pt, lo, hi = _ci_pct(sv_i)
+    L.append(f"- vs **inherit@xhigh** (status quo): **{pt}% fewer output tokens** "
+             f"(95% CI [{lo}, {hi}]).")
+    pt2, lo2, hi2 = _ci_pct(sv_h)
+    L.append(f"- vs **uniform-high** (model default): {pt2}% fewer output tokens "
+             f"(95% CI [{lo2}, {hi2}]).")
+    qpt, qlo, qhi = _ci_pp(qg_l)
+    L.append(f"- vs **uniform-low** (Anthropic subagent heuristic): {qpt}pp aggregate "
+             f"pass (95% CI [{qlo}, {qhi}]pp) — calibrated must buy back the hard-class "
+             f"quality that blanket-low sacrifices.")
+    ipt, ilo, ihi = _ci_pp(pd_i)
     L.append(f"- Aggregate pass: calibrated {_fmt_pct(pc['aggregate_pass_calibrated'])} "
              f"vs inherit@xhigh {_fmt_pct(pc['aggregate_pass_inherit_xhigh'])} "
-             f"(difference {'' if pdif['point'] is None else f'{pdif['point']*100:+.1f}pp'}, "
-             f"non-inferior at delta_agg={DELTA_AGG}: "
-             f"{'yes' if pc['noninferior_agg'] else 'no'}).")
+             f"(diff {ipt}pp, 95% CI [{ilo}, {ihi}]pp; non-inferior at "
+             f"delta_agg={DELTA_AGG}: {'yes' if pc['noninferior_agg'] else 'no'}).")
+    L.append("")
+    verdict = ("UN-DOMINATED — calibrated wins" if pc["undominated"]
+               else "NOT un-dominated — at least one leg fails at this power")
+    L.append(f"**Pareto verdict: {verdict}.** Victory requires token savings vs both "
+             "high-effort baselines (CI excludes 0) at non-inferior aggregate quality, "
+             "AND a strictly positive quality gain over uniform-low.")
     L.append("")
     L.append("Policy token totals (sum of per-task cell-mean output tokens over the "
              "12-task workload):")
@@ -1392,6 +1652,19 @@ def render_report(analysis: dict, tasks: dict) -> str:
         L.append(f"  - Low-confidence classes this run: {', '.join(any_lowconf)}.")
     L.append("- **Single model.** Calibration is specific to "
              f"{', '.join(m['model'])}; re-fit per model.")
+    L.append("- **Effort fidelity.** Each run's requested effort is verified against "
+             "the effective effort captured by a Stop hook (`effort.level`); "
+             "mismatched or unverified runs are excluded from their cell (04 Section "
+             "4.6), because headless JSON carries no effort field to confirm it landed.")
+    L.append("- **Adaptive thinking is a constant background factor** — it "
+             "self-regulates within every tier and cannot be disabled on Opus 4.8, so "
+             "measured tier effects are net of it, not independent of it.")
+    ot_threat = [c for c in m["classes"] if analysis["per_class"][c].get("overthinking")]
+    if ot_threat:
+        L.append(f"- **Overthinking tail (H3)** flagged for {', '.join(ot_threat)}: "
+                 "`max` spends more tokens without beating `xhigh` on pass rate, so the "
+                 "non-inferiority reference is the empirical ceiling tier, not "
+                 "mechanically `max`.")
     L.append("- **No temperature control.** The CLI exposes no `--seed`; run-to-run "
              "nondeterminism is the object of replication, not a nuisance removed. "
              "Run order is seeded-shuffled to de-correlate tier from wall-clock.")
@@ -1434,6 +1707,55 @@ def cmd_report(args) -> int:
 # --------------------------------------------------------------------------- #
 # Subcommand: calibrate (guarded refit, 04 Section 7.2)                        #
 # --------------------------------------------------------------------------- #
+def normalize_dispatch_record(rec: dict, known_classes: set) -> tuple | None:
+    """Normalize a dispatch-log record to (class, tier, accepted), else None.
+
+    Tolerates the two writers B1 emits into bench/state/dispatch-log.jsonl:
+      - source="effortmine": carries task_class + tier -> resolvable.
+      - source="posttooluse-hook": carries agent_type only (a `miner-<tier>` worker),
+        from which the CLASS is not derivable -> skipped (counted).
+    A class is derived from agent_type only if the agent_type IS a known class name
+    (unambiguous); a tier-named worker never resolves a class.
+    """
+    cls = rec.get("task_class")
+    tier = rec.get("tier")
+    agent = rec.get("agent_type") or ""
+    if not tier and agent.startswith("miner-"):
+        cand = agent.split("miner-", 1)[1]
+        tier = cand if cand in TIERS else None
+    if cls is None and agent in known_classes:
+        cls = agent  # unambiguous: agent_type literally names a class
+    if cls in known_classes and tier in TIERS:
+        return (cls, tier, rec.get("accepted"))
+    return None
+
+
+def load_dispatch_log(path: str, known_classes: set) -> tuple[dict, int, int]:
+    """Fold real-usage receipts into graded counts per (class, tier).
+
+    Returns (graded_by_cell, consumed, skipped). Only records whose `accepted` is a
+    bool contribute graded outcomes; dispatches with accepted=null count as consumed
+    but add no graded-N. bench/state may not exist yet (hook creates it lazily).
+    """
+    graded: dict = {}
+    consumed = skipped = 0
+    if not path or not os.path.exists(path):
+        return graded, consumed, skipped
+    recs, _ = read_jsonl(path)
+    for r in recs:
+        norm = normalize_dispatch_record(r, known_classes)
+        if norm is None:
+            skipped += 1
+            continue
+        consumed += 1
+        cls, tier, accepted = norm
+        if accepted is True or accepted is False:
+            d = graded.setdefault((cls, tier), {"k": 0, "n": 0})
+            d["n"] += 1
+            d["k"] += 1 if accepted else 0
+    return graded, consumed, skipped
+
+
 def cmd_calibrate(args) -> int:
     paths = Paths(args.root, args.tasks_dir)
     paths.ensure()
@@ -1443,6 +1765,7 @@ def cmd_calibrate(args) -> int:
     analysis = load_json(paths.analysis)
     tasks = {t["id"]: t for t in load_tasks(paths.tasks)}
     per_class = analysis["per_class"]
+    known_classes = set(per_class.keys())
 
     current = None
     if os.path.exists(paths.calibration):
@@ -1451,8 +1774,17 @@ def cmd_calibrate(args) -> int:
         except (OSError, json.JSONDecodeError):
             current = None
 
+    # Fold accumulated real-usage receipts (B1's dual-source dispatch log) into the
+    # graded-N used by the min-N gate. Absent/lazy dir is fine.
+    dispatch_path = os.path.join(paths.state, "dispatch-log.jsonl")
+    disp_graded, disp_consumed, disp_skipped = load_dispatch_log(dispatch_path, known_classes)
+
     print("[calibrate] guarded refit (min-N gate={}, single-step, clamped low..max)"
           .format(MIN_N_REFIT))
+    if os.path.exists(dispatch_path):
+        print(f"[calibrate] dispatch-log: consumed {disp_consumed}, skipped "
+              f"{disp_skipped} (unresolved class), graded-augmented cells "
+              f"{len(disp_graded)}")
     new_classes = {}
     moved = 0
     for cls in sorted(per_class.keys()):
@@ -1462,9 +1794,12 @@ def cmd_calibrate(args) -> int:
         cur_tier = (current.get(cls, {}).get("recommended_tier")
                     if current else None) or candidate
 
-        # Min-N gate: need >= MIN_N_REFIT graded for BOTH current and candidate cells.
-        n_cur = tiers_info.get(cur_tier, {}).get("n", 0)
-        n_cand = tiers_info.get(candidate, {}).get("n", 0)
+        # Min-N gate: >= MIN_N_REFIT graded for BOTH current and candidate cells,
+        # counting benchmark cells AND real-usage graded receipts from the log.
+        def eff_n(tier):
+            return (tiers_info.get(tier, {}).get("n", 0)
+                    + disp_graded.get((cls, tier), {}).get("n", 0))
+        n_cur, n_cand = eff_n(cur_tier), eff_n(candidate)
         gate_ok = (n_cur >= MIN_N_REFIT and n_cand >= MIN_N_REFIT)
 
         proposed = cur_tier
@@ -1481,24 +1816,29 @@ def cmd_calibrate(args) -> int:
 
         rec_info = tiers_info.get(proposed, {})
         pr = rec_info.get("pass_rate", 0.0)
-        prmax = info["pass_rate_max"]
+        prref = info["pass_rate_ref"]
         arrow = "->" if proposed != cur_tier else "=="
         flag = "moved" if proposed != cur_tier else "hold "
         print(f"[calibrate] {cls:<24} {cur_tier:>6} {arrow} {proposed:<6} "
-              f"[{flag}] (n={rec_info.get('n', 0)}, pass {pr:.2f} vs max {prmax:.2f}, "
-              f"delta={pr - prmax:+.2f} <= {DELTA}) {reason}")
+              f"[{flag}] (n={eff_n(proposed)}, pass {pr:.2f} vs ceiling {prref:.2f}, "
+              f"delta={pr - prref:+.2f} <= {DELTA}) {reason}")
 
         new_classes[cls] = {
             "recommended_tier": proposed, "tier": proposed,
             "confidence": info["confidence"],
-            "n": rec_info.get("n", 0), "n_graded": rec_info.get("n", 0),
+            "n": eff_n(proposed), "n_graded": eff_n(proposed),
             "fitted": proposed != cur_tier,
-            "pass_rate": pr, "pass_rate_max": prmax,
-            "delta_vs_max": pr - prmax,
+            "pass_rate": pr, "ceiling_tier": info["ceiling_tier"],
+            "pass_rate_ref": prref, "delta_vs_ref": pr - prref,
             "median_out_tokens": rec_info.get("median_out", 0),
+            "equivalence_low": info.get("equivalence_low"),
+            "overthinking": info.get("overthinking", False),
         }
 
     pc = analysis["policy_comparison"]
+    policy = _policy_block(pc)
+    policy["note"] = ("policy block reflects the analyze-time recommendation; guarded "
+                      "single-step tier moves may lag the NI-optimal tier")
     out = {
         "version": 1,
         "fitted_date": _dt.date.today().isoformat(),
@@ -1507,18 +1847,10 @@ def cmd_calibrate(args) -> int:
         "suite_version": "pilot-12",
         "margin_delta": DELTA,
         "refit": {"min_n_gate": MIN_N_REFIT, "single_step": True,
-                  "classes_moved": moved},
+                  "classes_moved": moved, "dispatch_consumed": disp_consumed,
+                  "dispatch_skipped": disp_skipped},
         "classes": new_classes,
-        "policy": {
-            "baseline_inherit_tier": pc["baseline_inherit_tier"],
-            "savings_pct_vs_inherit_xhigh": pc["savings_pct_vs_inherit_xhigh"],
-            "savings_pct_vs_uniform_high": pc["savings_pct_vs_uniform_high"],
-            "aggregate_pass_calibrated": pc["aggregate_pass_calibrated"],
-            "aggregate_pass_inherit_xhigh": pc["aggregate_pass_inherit_xhigh"],
-            "noninferior_agg": pc["noninferior_agg"],
-            "note": ("policy block reflects the analyze-time recommendation; "
-                     "guarded single-step tier moves may lag the NI-optimal tier"),
-        },
+        "policy": policy,
     }
     atomic_write_json(paths.calibration, out)
     print(f"[calibrate] {moved} class(es) moved; wrote "
@@ -1571,10 +1903,13 @@ def cmd_validate(args) -> int:
     tiers_accepted = {}
     envelope_fields: set[str] = set()
     modulation_out = {t: [] for t in TIERS}
+    fidelity_obs = {t: [] for t in TIERS}   # tier -> effective levels observed via hook
+    cap_sidecar = None
 
     if args.mock:
         for t in TIERS:
             tiers_accepted[t] = True
+            fidelity_obs[t] = [t, t, t]   # mock: effective == requested for all tiers
         # Fabricate a probe envelope per tier x3 for the modulation check.
         for t in TIERS:
             for rep in range(1, 4):
@@ -1586,9 +1921,22 @@ def cmd_validate(args) -> int:
                      "session_id", "total_cost_usd", "usage"])
         report["latency"] = {t: {"mean_ms": MOCK_BASE_OUT[t] * 8} for t in TIERS}
     else:
+        # 4.6 install the effort-capture hook so probes also record EFFECTIVE effort.
+        cap_settings, cap_sidecar = setup_effort_capture(os.path.join(paths.state, "capture"))
+
+        def _observe_effective(ev):
+            if not isinstance(ev, dict):
+                return
+            eff = effective_from_sidecar(cap_sidecar, ev.get("session_id", ""))
+            if eff is None:
+                eff = detect_effective_effort(ev)
+            if eff:
+                fidelity_obs[t].append(eff)
+
         # 4.1 flag acceptance + 4.2 envelope enumeration
         for t in TIERS:
-            res = invoke_claude("Reply with the single word: ok", t, args.model, 120, env)
+            res = invoke_claude("Reply with the single word: ok", t, args.model, 120,
+                                env, cap_settings)
             ev = None
             if res.returncode == 0 and res.stdout.strip():
                 try:
@@ -1600,14 +1948,16 @@ def cmd_validate(args) -> int:
                 envelope_fields.update(ev.keys())
                 if isinstance(ev.get("usage"), dict):
                     envelope_fields.update(f"usage.{k}" for k in ev["usage"].keys())
-        # 4.3 effort-modulation probe (x3 per tier)
+            _observe_effective(ev)
+        # 4.3 effort-modulation probe (x3 per tier) + 4.6 fidelity capture
         for t in TIERS:
             for _ in range(3):
-                res = invoke_claude(_PROBE, t, args.model, RUN_TIMEOUT_S, env)
+                res = invoke_claude(_PROBE, t, args.model, RUN_TIMEOUT_S, env, cap_settings)
                 if res.returncode == 0 and res.stdout.strip():
                     try:
                         ev = json.loads(res.stdout)
                         modulation_out[t].append(int(ev.get("usage", {}).get("output_tokens", 0)))
+                        _observe_effective(ev)
                     except json.JSONDecodeError:
                         pass
         # 4.5 latency sizing on two tiers
@@ -1651,17 +2001,44 @@ def cmd_validate(args) -> int:
     if not all_accepted and report["abort_code"] is None:
         report["abort_code"] = "tier_rejected"
 
+    # 4.6 Effort-fidelity gate: for every tier, requested must == effective (captured
+    # by the hook). A downgrade or an unverifiable tier is a hard gate failure.
+    fidelity = {}
+    fidelity_ok = True
+    for t in TIERS:
+        obs = fidelity_obs.get(t, [])
+        if obs and all(o == t for o in obs):
+            eff, ok_t = t, True
+        elif obs:
+            eff, ok_t = obs[-1], False       # a genuine downgrade
+        else:
+            eff, ok_t = "unverified", False   # hook never fired for this tier
+        fidelity[t] = {"requested": t, "effective": eff, "observations": obs, "ok": ok_t}
+        if not ok_t:
+            fidelity_ok = False
+    report["effort_fidelity"] = {
+        "per_tier": fidelity, "passed": fidelity_ok,
+        "capture": "mock" if args.mock else "stop-hook",
+        "note": ("requested==effective for all five tiers confirms opus-4-8 honors "
+                 "each level; mismatched/unverified tiers must be dropped (04 4.6/4.7)"),
+    }
+    if not fidelity_ok and report["abort_code"] is None:
+        report["abort_code"] = "effort_downgrade_or_unverified"
+        print("[validate] ABORT: effort fidelity failed — at least one tier's "
+              "effective effort could not be confirmed equal to requested. "
+              "See state/phase0.json effort_fidelity; do not run the matrix.")
+
     # 4.5 timeout headroom
     max_lat = report["latency"].get("max", {}).get("mean_ms", 0)
     report["latency"]["timeout_headroom_ok"] = (RUN_TIMEOUT_S * 1000) > (max_lat * 3 + 1)
 
-    report["gate_passed"] = bool(env_ok and modulation_ok and all_accepted)
+    report["gate_passed"] = bool(env_ok and modulation_ok and all_accepted and fidelity_ok)
     atomic_write_json(paths.phase0, report)
 
     print(f"[validate] mock={args.mock} tiers_accepted="
           f"{sum(1 for v in tiers_accepted.values() if v)}/{len(TIERS)} "
           f"modulation_ratio={ratio:.2f} (>= {MODULATION_RATIO}: {modulation_ok}) "
-          f"env_ok={env_ok}")
+          f"env_ok={env_ok} fidelity_ok={fidelity_ok}")
     print(f"[validate] envelope fields: {len(report['envelope_fields'])} captured")
     print(f"[validate] gate_passed={report['gate_passed']} "
           f"abort_code={report['abort_code']}")
@@ -1685,7 +2062,7 @@ def cmd_selftest(args) -> int:
     try:
         ns = argparse.Namespace(root=tmp, tasks_dir=real_tasks, seed=SEED_DEFAULT,
                                 model=MODEL, mock=True, scale="pilot", parallel=1,
-                                rerun_failed=False, regrade=False)
+                                rerun_failed=False, regrade=False, force=False)
         paths = Paths(tmp, real_tasks)
 
         print("[selftest] 1. validate --mock")
@@ -1695,6 +2072,10 @@ def cmd_selftest(args) -> int:
         check(p0["gate_passed"] is True, "Phase 0 gate passed (mock)")
         check(p0["modulation"]["ratio_max_over_low"] >= MODULATION_RATIO,
               "modulation ratio >= 2x")
+        check(p0["effort_fidelity"]["passed"] is True,
+              "Phase 0.6 effort-fidelity gate passed (mock)")
+        check(all(p0["effort_fidelity"]["per_tier"][t]["effective"] == t for t in TIERS),
+              "every tier requested == effective (mock)")
         check(rc == 0, "validate exit 0")
 
         print("[selftest] 2. run --mock")
@@ -1705,11 +2086,14 @@ def cmd_selftest(args) -> int:
         check(bad == 0, "no corrupt result lines")
         check(len(results) == expected_cells,
               f"results count == matrix ({len(results)} == {expected_cells})")
-        required_fields = {"run_id", "task_id", "tier", "requested_effort",
-                           "effective_effort", "tokens_out", "cost_usd", "nonce",
+        required_fields = {"run_id", "task_id", "tier", "effort_requested",
+                           "effort_effective", "effort_effective_source", "fidelity_ok",
+                           "output_tokens", "total_cost_usd", "model_usage", "nonce",
                            "raw_answer_path", "api_error", "seed"}
         check(all(required_fields <= set(r) for r in results),
-              "every record has the required schema fields")
+              "every record has the required (envelope-bound) schema fields")
+        check(all(r["fidelity_ok"] for r in results if not r["api_error"]),
+              "every non-error run is fidelity-verified (mock)")
         check(all(os.path.exists(os.path.join(tmp, r["raw_answer_path"]))
                   for r in results if not r["api_error"]),
               "every raw answer file exists")
@@ -1741,14 +2125,23 @@ def cmd_selftest(args) -> int:
         for cls, info in analysis["per_class"].items():
             check(info["recommended_tier"] in TIERS,
                   f"{cls} recommended tier valid ({info['recommended_tier']})")
+            check(info["ceiling_tier"] in TIERS, f"{cls} ceiling tier valid")
             for t, ti in info["tiers"].items():
                 lo, hi = ti["wilson"]
                 if not (0.0 <= lo <= hi <= 1.0):
                     check(False, f"{cls}/{t} Wilson CI in [0,1] and ordered")
-        check("savings_pct_vs_inherit_xhigh" in analysis["policy_comparison"],
-              "policy savings computed")
-        sv = analysis["policy_comparison"]["savings_pct_vs_inherit_xhigh"]
-        check(sv["point"] is not None, "savings point estimate present")
+        # Easy classes carry a TOST result (bool); hard classes carry the overthink flag.
+        for cls in EASY_CLASSES:
+            if cls in analysis["per_class"]:
+                check(analysis["per_class"][cls]["equivalence_low"] in (True, False),
+                      f"{cls} TOST equivalence computed")
+        pcmp = analysis["policy_comparison"]
+        for key in ("savings_pct_vs_inherit_xhigh", "savings_pct_vs_uniform_high",
+                    "quality_gain_vs_uniform_low", "undominated", "noninferior_agg"):
+            check(key in pcmp, f"policy_comparison has {key}")
+        check(pcmp["savings_pct_vs_inherit_xhigh"]["point"] is not None,
+              "savings point estimate present")
+        check(isinstance(pcmp["undominated"], bool), "Pareto undominated verdict is bool")
 
         print("[selftest] 6. report")
         cmd_report(ns)
@@ -1763,13 +2156,23 @@ def cmd_selftest(args) -> int:
                         for ch in md)
         check(not has_emoji, "RESULTS.md contains no emoji")
 
-        print("[selftest] 7. calibrate (guarded refit)")
+        print("[selftest] 7. calibrate (guarded refit + dual-source dispatch log)")
+        # Seed a dual-source dispatch log: one resolvable effortmine record and one
+        # unresolvable posttooluse-hook record (agent_type only) that must be skipped.
+        os.makedirs(paths.state, exist_ok=True)
+        with open(os.path.join(paths.state, "dispatch-log.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"source": "effortmine", "task_class": "T1-mechanical",
+                                "tier": "low", "accepted": True}) + "\n")
+            f.write(json.dumps({"source": "posttooluse-hook", "agent_type": "miner-low",
+                                "session_id": "x"}) + "\n")
         cmd_calibrate(ns)
         cal = load_json(paths.calibration)
         check(set(cal["classes"].keys()) == {t["class"] for t in tasks},
               "calibration covers all classes")
         check(all(c["tier"] in TIERS for c in cal["classes"].values()),
               "all calibrated tiers valid")
+        check(cal["refit"]["dispatch_consumed"] == 1 and cal["refit"]["dispatch_skipped"] == 1,
+              "dispatch-log: 1 consumed (effortmine), 1 skipped (hook agent_type only)")
 
         print("[selftest] 8. no stray temp files left in state/raw")
         strays = (glob.glob(os.path.join(paths.state, ".tmp-*"))
@@ -1814,6 +2217,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--parallel", type=int, default=3)
     r.add_argument("--rerun-failed", action="store_true",
                    help="also re-run cells whose graded verdict is fail")
+    r.add_argument("--force", action="store_true",
+                   help="bypass the Phase 0 hard gate (loud warning)")
     r.set_defaults(func=cmd_run)
 
     g = sub.add_parser("grade", help="apply checkers to results")
@@ -1841,7 +2246,7 @@ def main(argv=None) -> int:
     for attr, default in (("mock", False), ("scale", "pilot"), ("parallel", 1),
                           ("seed", SEED_DEFAULT), ("model", MODEL),
                           ("rerun_failed", False), ("regrade", False),
-                          ("tasks_dir", None)):
+                          ("force", False), ("tasks_dir", None)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
     return args.func(args)

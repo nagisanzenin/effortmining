@@ -45,10 +45,13 @@ re-bills completed work.
   the flag is accepted and the JSON envelope parses, and enumerates the envelope's
   field names. It runs the **effort-modulation check** (a fixed novel reasoning probe
   ×3 per tier) and **aborts** unless median `max`-tier output tokens ≥ 2× median `low`.
-  It audits env sanitization (`CLAUDE_CODE_EFFORT_LEVEL` must be unset — a hard error
-  that fails the gate, since a per-run level that can be overridden cannot be trusted)
-  and sizes latency. Writes `state/phase0.json` and **gates `run`**. `--mock` exercises
-  the plumbing with fabricated probes. Exit 0 iff the gate passes.
+  It runs the **Phase 0.6 effort-fidelity check** (§4.6): a temporary Stop-hook
+  captures each probe's effective `effort.level`, and the gate aborts unless
+  requested == effective for all five tiers (proving Opus 4.8 honors each level with
+  no silent downgrade). It audits env sanitization (`CLAUDE_CODE_EFFORT_LEVEL` must be
+  unset — a hard error) and sizes latency. Writes `state/phase0.json` and **gates
+  `run`** (a real `run` refuses to start unless `gate_passed`, or `--force`). `--mock`
+  exercises the plumbing with fabricated probes. Exit 0 iff the gate passes.
 
 - **`run`** — Executes the matrix. Builds the `(task, tier, rep)` cell list for the
   chosen scale, shuffles it with a fixed seed (`--seed`, default `20260706`, recorded
@@ -71,12 +74,17 @@ re-bills completed work.
   reused; `--regrade` forces a full recompute.
 
 - **`analyze`** — Computes the statistics (methodology §5): per-cell pass rates with
-  Wilson 95% score intervals; per-`(class, tier)` pooling (9 trials/cell at n=3);
-  the non-inferiority decision (point guard **and** Newcombe difference-CI guard at
-  δ=10pp); the cheapest non-inferior tier per class; seeded stratified-bootstrap CIs
-  for the RQ3 policy comparison (calibrated vs inherit@`xhigh` vs uniform-high vs the
-  bookends); and the possibly-mis-classed-task flag. Writes `state/analysis.json` and
-  the v1 `state/calibration.json`.
+  Wilson 95% score intervals; per-`(class, tier)` pooling (9 trials/cell at n=3). The
+  non-inferiority **reference is the empirical quality-ceiling tier** (arg-max pooled
+  pass, ties → cheaper) — not mechanically `max`, so an overthinking `max` cannot
+  lower the bar (H3). It applies the non-inferiority rule (point guard **and** Newcombe
+  difference-CI guard at δ=10pp) to pick the cheapest non-inferior tier per class;
+  adds a **TOST equivalence test** for easy classes T1/T2 (H1, upgrading confidence to
+  `high(equiv)` when `low` is provably within ±10pp of the ceiling) and an
+  **overthinking flag** (H3). The RQ3 policy comparison scores calibrated against
+  **three** baselines — inherit@`xhigh`, uniform-`high`, uniform-`low` — with seeded
+  stratified-bootstrap CIs and a **Pareto un-dominated** victory verdict. Writes
+  `state/analysis.json` and the v1 `state/calibration.json`.
 
 - **`report`** — Renders `bench/RESULTS.md` from `analysis.json` (methodology §8):
   run manifest, the full matrix table, per-class pass/token curves (ASCII sparklines
@@ -87,9 +95,12 @@ re-bills completed work.
   and for each class may move the recommended tier only if all guards hold: ≥ 9 graded
   outcomes exist for both the current and candidate cells (min-N gate), moves are a
   **single tier step** along `low↔medium↔high↔xhigh↔max`, clamped to `low..max`, and
-  the non-inferiority decision must actually change. Prints a human-readable diff and
-  writes the updated `state/calibration.json`. Guards keep a noisy handful of receipts
-  from thrashing the table.
+  the non-inferiority decision must actually change. It also folds B1's runtime
+  `state/dispatch-log.jsonl` into the min-N count, tolerating both writer shapes: an
+  `effortmine` record carries `task_class`; a `posttooluse-hook` record carries only
+  `agent_type` (a `miner-<tier>` worker) from which the class is not derivable, so it
+  is **skipped and counted**. Prints a human-readable diff and writes the updated
+  `state/calibration.json`.
 
 - **`selftest`** — Runs the mock pipeline end-to-end (`validate --mock` → `run --mock`
   → `grade` → `analyze` → `report` → `calibrate`) in a throwaway temp dir and asserts
@@ -110,6 +121,8 @@ from `--tasks-dir` (default `<root>/tasks`).
 | `state/graded.jsonl` | `grade` | no (gitignored) | graded outcomes, one per cell |
 | `state/analysis.json` | `analyze` | no (gitignored) | full statistical analysis |
 | `state/calibration.json` | `analyze`, `calibrate` | **yes** | the calibration table (the deliverable) |
+| `state/capture/` | `run`, `validate` (real) | no (gitignored) | effort-fidelity Stop-hook + sidecar |
+| `state/dispatch-log.jsonl` | B1 skill/hook (runtime) | no (gitignored) | dual-source dispatch receipts read by `calibrate` |
 | `RESULTS.md` | `report` | yes | human-readable results |
 
 `raw/` and `state/*` are gitignored; `state/calibration.json` is force-tracked
@@ -117,26 +130,31 @@ from `--tasks-dir` (default `<root>/tasks`).
 
 ## `results.jsonl` record schema
 
-One JSON object per line (methodology §9.3), for example:
+One JSON object per line, with token/cost/duration keys bound verbatim to the
+R1-confirmed envelope (methodology §9.3), for example:
 
 ```json
 {"run_id":"T2a__high__r1","task_id":"T2a","class":"T2-simple-transform","tier":"high",
- "requested_effort":"high","effective_effort":"high","rep":1,"scale":"pilot",
- "seed":20260706,"nonce":"…","model":"claude-opus-4-8","cli_version":"2.1.201",
- "ts_start":"…","ts_end":"…","duration_ms":0,"session_id":"…","tokens_in":0,
- "tokens_out":0,"tokens_total":0,"cache_read":0,"cache_creation":0,"cost_usd":0.0,
- "raw_answer_path":"raw/answers/T2a__high__r1.txt","exit_status":0,"api_error":false,
- "retries":0}
+ "effort_requested":"high","effort_effective":"high","effort_effective_source":"hook",
+ "fidelity_ok":true,"rep":1,"scale":"pilot","seed":20260706,"nonce":"…",
+ "model":"claude-opus-4-8","cli_version":"2.1.201","ts_start":"…","ts_end":"…",
+ "duration_ms":0,"session_id":"…","input_tokens":0,"output_tokens":0,"total_tokens":0,
+ "cache_creation_input_tokens":0,"cache_read_input_tokens":0,"total_cost_usd":0.0,
+ "model_usage":{},"raw_answer_path":"raw/answers/T2a__high__r1.txt","exit_status":0,
+ "api_error":false,"retries":0}
 ```
 
 `grade` adds `{"pass":true,"checker_type":"pytest-asserts","failure_class":"none",
 "checker_detail":"6/6 asserts"}`.
 
-`requested_effort` is the tier passed via `--effort`. `effective_effort` is read from
-the envelope if a future CLI exposes it, else it defaults to the requested tier —
-headless JSON does not currently report per-run effort (see
-[`01-mechanism-investigation.md`](../docs/research/01-mechanism-investigation.md) §6);
-the Phase 0.3 modulation check is what validates that effort is actually live.
+**Effort fidelity.** `effort_requested` is the tier passed via `--effort`.
+`effort_effective` is the tier that actually ran, read out-of-band from a Stop-hook
+capture (`effort_effective_source:"hook"`) and joined to the run by `session_id` —
+headless JSON carries no effort field (see
+[`01-mechanism-investigation.md`](../docs/research/01-mechanism-investigation.md) §6).
+A run counts toward its cell only if `fidelity_ok` (requested == effective, verified);
+a downgrade or an unverified capture is excluded and re-attempted (§4.6). Phase 0.6
+gates the whole matrix on requested == effective for all five tiers.
 
 ## The grade sandbox — honest scope
 
@@ -152,11 +170,13 @@ executed **only** here — never elsewhere in the harness.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests    # 47 unit tests
+python3 -m unittest discover -s tests    # 60 unit tests
 python3 bench/effort.py selftest         # offline end-to-end invariants
 ```
 
 The unit suite covers the Wilson interval against textbook values, the Newcombe
 difference CI against the published worked example, the non-inferiority rule and its
-edge cases, resumability, seeded-shuffle and bootstrap determinism, atomic-write
-crash-safety, env sanitization, answer parsing, and both graders.
+edge cases, the ceiling-referenced calibration and overthinking flag, TOST equivalence,
+the dual-source dispatch-log normalization, effort-fidelity validity, resumability,
+seeded-shuffle and bootstrap determinism, atomic-write crash-safety, env sanitization,
+answer parsing, and both graders.
