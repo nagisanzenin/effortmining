@@ -1,6 +1,6 @@
 {
   "name": "effortmining",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Calibrated per-subagent reasoning effort: classify each subtask, dispatch it to the cheapest tier that still passes.",
   "author": {
     "name": "nagisanzenin"

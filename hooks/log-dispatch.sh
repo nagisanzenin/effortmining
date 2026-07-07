@@ -40,7 +40,13 @@ if tool_name not in ("Task", "Agent"):
     sys.exit(0)
 
 tool_input = payload.get("tool_input") or {}
-agent_type = tool_input.get("subagent_type")
+# Field spelling varies across CLI surfaces (observed live: subagent_type absent
+# on an Agent-tool dispatch). Try known spellings, then fall back to scanning
+# string values for a tier-pinned worker name — the only value calibrate needs.
+agent_type = (tool_input.get("subagent_type") or tool_input.get("subagentType")
+              or tool_input.get("agent_type") or tool_input.get("agentType")
+              or next((v for v in tool_input.values()
+                       if isinstance(v, str) and v.startswith("miner-")), None))
 session_id = payload.get("session_id")
 
 # Prefer effort.level from the payload; fall back to the env var. Note this is
