@@ -1,0 +1,41 @@
+{
+  "id": "C4",
+  "class": "C-coding",
+  "prompt": "Implement a Python function `resolve_schedule(requests, min_run)` that resolves a set of\ncompeting time-range reservations on an INTEGER timeline into a single normalized ownership\ntimeline, applying three rules in a FIXED precedence.\n\nInput:\n  - `requests`: a list of dicts, each `{\"start\": int, \"end\": int, \"priority\": int, \"holder\": str}`,\n    meaning `holder` requests the half-open interval [start, end) at the given integer `priority`\n    (larger number = stronger). Requests with `start >= end` are empty and MUST be ignored.\n  - `min_run`: a positive integer, the minimum length of any surviving owned segment.\n\nOutput:\n  - a list of `(start, end, holder)` tuples sorted ascending by `start`, describing who owns each\n    maximal stretch of the timeline after the rules below. Unowned stretches are simply absent\n    from the list (they appear as gaps between consecutive tuples).\n\nApply these rules IN THIS ORDER. The order is part of the specification: applying them in a\ndifferent order produces different — and wrong — results on the interaction cases.\n\n  RULE 1 - PREEMPTION (priority). Consider each integer instant t. Among all requests whose\n  interval covers t (start <= t < end), instant t is owned by the request with the highest\n  `priority`. Ties are broken deterministically, in this order: (a) higher `priority` wins;\n  if still tied, (b) the request with the earliest `start` wins; if still tied, (c) the\n  lexicographically smallest `holder` wins. An instant covered by no request is unowned. Group\n  instants into maximal contiguous runs that share the same owning holder.\n\n  RULE 2 - MINIMUM RUN (drop). Any owned run whose length (end - start) is STRICTLY LESS THAN\n  `min_run` is invalid: it is discarded and every instant in it becomes UNOWNED. Dropped instants\n  are NOT reassigned to any other request. A holder disqualified on one run may still own others.\n\n  RULE 3 - SAME-HOLDER BRIDGING. After Rule 2, whenever two owned segments have the SAME holder\n  and are separated ONLY by unowned time whose total width is STRICTLY LESS THAN `min_run`, that\n  gap is filled with that holder and the two segments plus the bridged gap become one segment. A\n  gap that is `min_run` wide or wider is NOT bridged. A gap that contains ANY time owned by a\n  different holder is NOT bridged (only purely-unowned gaps bridge). Repeat bridging until no\n  further bridge is possible.\n\nWorked examples (illustrations, not the full test set):\n\n  # a high-priority request carves the middle out of a low-priority one:\n  resolve_schedule([{\"start\":0,\"end\":12,\"priority\":1,\"holder\":\"a\"},\n                    {\"start\":4,\"end\":8,\"priority\":5,\"holder\":\"b\"}], 3)\n      == [(0,4,\"a\"), (4,8,\"b\"), (8,12,\"a\")]\n\n  # the carved-out middle is too short to survive Rule 2, so it is dropped; then Rule 3 bridges\n  # the two \"a\" pieces across the resulting sub-min_run unowned gap:\n  resolve_schedule([{\"start\":0,\"end\":10,\"priority\":1,\"holder\":\"a\"},\n                    {\"start\":4,\"end\":6,\"priority\":5,\"holder\":\"b\"}], 3)\n      == [(0,10,\"a\")]\n\n  # but a purely-unowned gap that is min_run or wider is left as a real gap:\n  resolve_schedule([{\"start\":0,\"end\":4,\"priority\":1,\"holder\":\"a\"},\n                    {\"start\":8,\"end\":12,\"priority\":1,\"holder\":\"a\"}], 3)\n      == [(0,4,\"a\"), (8,12,\"a\")]\n\nRespond with a SINGLE Python code block (```python ... ```) defining `resolve_schedule` and\nnothing else. Include no explanation outside the code block.",
+  "checker": {
+    "type": "pytest-asserts",
+    "answer_convention": "python-code-block",
+    "entrypoint": "resolve_schedule",
+    "asserts": [
+      "assert resolve_schedule([], 3) == []",
+      "assert resolve_schedule([{'start':0,'end':5,'priority':1,'holder':'a'}], 2) == [(0,5,'a')]",
+      "assert resolve_schedule([{'start':5,'end':5,'priority':1,'holder':'a'}], 2) == []",
+      "assert resolve_schedule([{'start':7,'end':3,'priority':1,'holder':'a'}], 2) == []",
+      "assert resolve_schedule([{'start':0,'end':12,'priority':1,'holder':'a'},{'start':4,'end':8,'priority':5,'holder':'b'}], 3) == [(0,4,'a'),(4,8,'b'),(8,12,'a')]",
+      "assert resolve_schedule([{'start':0,'end':10,'priority':1,'holder':'a'},{'start':4,'end':9,'priority':5,'holder':'b'}], 3) == [(0,4,'a'),(4,9,'b')]",
+      "assert resolve_schedule([{'start':0,'end':6,'priority':1,'holder':'b'},{'start':2,'end':8,'priority':1,'holder':'a'}], 2) == [(0,6,'b'),(6,8,'a')]",
+      "assert resolve_schedule([{'start':0,'end':5,'priority':1,'holder':'b'},{'start':0,'end':5,'priority':1,'holder':'a'}], 2) == [(0,5,'a')]",
+      "assert resolve_schedule([{'start':0,'end':10,'priority':1,'holder':'h1'},{'start':4,'end':6,'priority':5,'holder':'h2'}], 3) == [(0,10,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':12,'priority':1,'holder':'h1'},{'start':4,'end':9,'priority':5,'holder':'h2'}], 3) == [(0,4,'h1'),(4,9,'h2'),(9,12,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':4,'priority':1,'holder':'h1'},{'start':8,'end':12,'priority':1,'holder':'h1'}], 3) == [(0,4,'h1'),(8,12,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':10,'priority':1,'holder':'h1'},{'start':4,'end':6,'priority':5,'holder':'h2'},{'start':4,'end':6,'priority':3,'holder':'h3'}], 3) == [(0,10,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':10,'priority':1,'holder':'h1'},{'start':4,'end':7,'priority':5,'holder':'h2'}], 3) == [(0,4,'h1'),(4,7,'h2'),(7,10,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':4,'priority':1,'holder':'a'},{'start':4,'end':8,'priority':1,'holder':'b'}], 2) == [(0,4,'a'),(4,8,'b')]",
+      "assert resolve_schedule([{'start':0,'end':20,'priority':1,'holder':'h1'},{'start':4,'end':6,'priority':5,'holder':'h2'},{'start':10,'end':12,'priority':5,'holder':'h3'}], 3) == [(0,20,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':4,'priority':1,'holder':'h1'},{'start':6,'end':10,'priority':1,'holder':'h1'}], 3) == [(0,10,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':14,'priority':1,'holder':'h1'},{'start':4,'end':6,'priority':5,'holder':'h2'},{'start':8,'end':10,'priority':5,'holder':'h3'}], 3) == [(0,4,'h1'),(10,14,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':3,'priority':1,'holder':'a'},{'start':1,'end':2,'priority':9,'holder':'b'}], 1) == [(0,1,'a'),(1,2,'b'),(2,3,'a')]",
+      "assert resolve_schedule([{'start':0,'end':4,'priority':1,'holder':'a'},{'start':4,'end':6,'priority':9,'holder':'z'},{'start':6,'end':10,'priority':1,'holder':'b'}], 3) == [(0,4,'a'),(6,10,'b')]",
+      "assert resolve_schedule([{'start':0,'end':12,'priority':1,'holder':'a'},{'start':2,'end':5,'priority':5,'holder':'b'},{'start':7,'end':10,'priority':5,'holder':'b'}], 2) == [(0,2,'a'),(2,5,'b'),(5,7,'a'),(7,10,'b'),(10,12,'a')]",
+      "assert resolve_schedule([{'start':0,'end':12,'priority':5,'holder':'b'},{'start':5,'end':7,'priority':1,'holder':'a'}], 3) == [(0,12,'b')]",
+      "assert resolve_schedule([{'start':0,'end':4,'priority':2,'holder':'a'},{'start':1,'end':6,'priority':2,'holder':'b'},{'start':2,'end':8,'priority':2,'holder':'c'}], 2) == [(0,4,'a'),(4,6,'b'),(6,8,'c')]",
+      "assert resolve_schedule([{'start':0,'end':9,'priority':1,'holder':'h1'},{'start':4,'end':5,'priority':9,'holder':'h2'}], 3) == [(0,9,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':3,'priority':1,'holder':'h1'},{'start':6,'end':9,'priority':1,'holder':'h1'}], 3) == [(0,3,'h1'),(6,9,'h1')]",
+      "assert resolve_schedule([{'start':0,'end':3,'priority':1,'holder':'a'},{'start':10,'end':13,'priority':1,'holder':'b'}], 2) == [(0,3,'a'),(10,13,'b')]",
+      "assert resolve_schedule([{'start':0,'end':20,'priority':1,'holder':'base'},{'start':3,'end':4,'priority':9,'holder':'x'},{'start':8,'end':13,'priority':9,'holder':'y'},{'start':16,'end':17,'priority':9,'holder':'x'}], 3) == [(0,8,'base'),(8,13,'y'),(13,20,'base')]"
+    ],
+    "timeout_s": 5
+  },
+  "max_output_guardrail": 3000,
+  "timeout_s": 300
+}

@@ -180,3 +180,62 @@ Two places where v2 extends contracts owned outside this task (`bench/effort.py`
 ---
 
 *Numeric results are produced only by `bench/effort.py analyze`/`report` from real graded runs; this document pre-registers the design and fabricates no results.*
+
+---
+
+## Amendment A (2026-07-07) — Fitting-set extension: six hard R/C tasks (R4–R6, C4–C6)
+
+**Status of this amendment:** authored **2026-07-07**, **PRE-DATA for the six new cells** (no generation run has touched R4–R6 or C4–C6 at authoring time). It is an *amendment*, not part of the original v2 pre-registration: the original H1–H6 and the composite verdict in `RESULTS-v2.md` stand as first registered. This amendment pre-registers **H7** and an **extension matrix + guarded refit + a single confirmation re-run**, all fixed before the extension data is collected. Oracle integrity for the six new tasks is proven by `bench/tools/validate_oracles_v2.py` (now **163 checks, exit 0**; the original 114 are unchanged and 49 are added), which must stay green in CI before any extension sweep.
+
+### A.1 Why extend the fitting set: the v2 run exposed fit-blindness
+
+The v2 sweep did to v2 what v2 was built to catch in v1. Per `bench/RESULTS-v2.md` §2, **both scored classes saturate at 100% across every tier**:
+
+> `C-coding` — low/medium/high/xhigh/max all **100%**; *"Recommended: **low** (confidence: low, ceiling: low, delta vs ceiling: +0.000)"*.
+> `R-research` — low/medium/high/xhigh/max all **100%**; *"Recommended: **low** (confidence: low, ceiling: low, delta vs ceiling: +0.000)"*.
+
+That is exactly the failure this document pre-registered as a live risk. Quoting the pre-registered warnings verbatim:
+
+> "**H4** … if H4 fails (everything still passes at `low`), the v2 tasks are *still* too easy and 'no regression' remains untested — a real, reportable negative outcome." (§4.1)
+
+> "**Difficulty calibration is itself a hypothesis.** H4 tests whether the v2 tasks are actually hard enough to regress; if H4 fails, the suite is still too easy and 'no regression' is again untested — reported honestly rather than hidden." (§6)
+
+> "The suite was too easy to *regress*, so 'no quality loss' was demonstrated only where there was almost no quality to lose." (§0, of the v1 pilot — the exact trap v2 has now re-sprung on `claude-opus-4-8`.)
+
+On `claude-opus-4-8`, **H4 was not met** for either class: R1–R3 and C1–C3 pass at `low`, so the calibration table recommends `low` for the whole R-research and C-coding classes at **zero measured delta and "low" confidence**. This is *fit-blindness*: the class curve is flat, so the fitter cannot see the difficulty **range** inside the class, and the recommended-tier it emits **under-provisions genuinely hard in-class instances** — a hard real research job or a subtle real bug-hunt would be dispatched at `low` because the easy in-class exemplars saturated there. The calibration is only as informative as the hardest task in the cell, and the hardest v2 task in each class was still too easy.
+
+**The fix is not to make the existing tasks harder** (that would break the standing v1/v2 comparison) **but to widen the class to cover its difficulty range.** R4–R6 and C4–C6 are authored to sit at the hard end of their classes, replicating the only v2 task that ever discriminated by tier — X1.3 (`low` 0/3, `high` 1/6, `xhigh` 3/3), the sole cell in either suite where careful effort beat a skim.
+
+### A.2 The six tasks (authored, validated, PRE-DATA)
+
+| id | class | checker | failure mode targeted (skim → wrong; careful → right) | corpus / asserts |
+|---|---|---|---|---|
+| **R4** | R-research | `exact` (6-field) | **multi-hop attribution** — a lineage chain deck→`arr_final`→`arr_staging`→snapshot view→`subscriptions_raw` (replica)→**Zephyr `Invoice.amountDueCents`**; a depth-limited auto-card offers the decoy shortcut `arr_staging`, and "…raw" tempts a stop at the internal replica. | 12 docs (~6.5k tok) |
+| **R5** | R-research | `exact` (4-field) | **quantitative reconciliation** — one figure from three sources with a **unit conversion** (per-1,000 calls) and an **effective-date rule**; the loud headline ($2.00) is superseded and the newest rate ($1.50) is not yet effective, so naive extraction grabs a wrong rate. | 15 docs (~6.0k tok) |
+| **R6** | R-research | `exact` (6-field) | **common-cause across 4 incidents** — each has a loud local cause; the quiet shared cause (`CHG-7788`, `edge.http.workerThreads` 256→16 fleet-wide) is reachable only by crossing onset timestamps with the topology map, and **one incident is a genuine coincidence** (skim answers "all four"). | 14 docs (~6.2k tok) |
+| **C4** | C-coding | `pytest-asserts` | **interacting corner rules** — preemption + drop-short + same-holder bridging with a fixed precedence; naive impls satisfy any two but fail the drop-then-bridge and bridge-vs-lurking-priority interactions. | 26 asserts |
+| **C5** | C-coding | `pytest-asserts` | **three interlocking bugs** in a ~140-line module, each individually invisible; the round-trip assert needs two fixed at once, and **only the all-three-fixed module passes** (every one of the 7 partial fixes fails). | 30 asserts |
+| **C6** | C-coding | `pytest-asserts` | **a formal invariant** — merge must be a semilattice join (commutative, associative, idempotent) with tombstone retention; dict-union / tie-to-arrival / drop-tombstone shortcuts violate the invariant on adversarial sequences. | 30 asserts |
+
+Every R fact is invented (product names, versions, dates, figures) so no answer is recallable from training data; every R key is **re-derived by scripted parsing of the documents** in the validator (not asserted), and each C assert suite is proven to **pass an independent reference and fail a plausible-naive implementation** (for C5, to fail every partial-fix combination and the shipped buggy module). Contamination control and the exact-checkable / uniquely-derivable requirements are inherited unchanged from §1 and 04 §2.2.
+
+### A.3 Pooling: the class cell now spans the class's difficulty range
+
+With the extension, each scored class pools **6 tasks × 3 reps = 18 trials per (class, tier)** (up from 9). The wider *n* tightens the Wilson interval, but the load-bearing change is **composition, not count**: the cell now contains both the v2 easy exemplars (R1–R3, C1–C3) **and** the hard exemplars (R4–R6, C4–C6). A class recommended-tier is a single number applied to every in-class job, so the cell **must cover the class's difficulty range** for that number to be honest — that is the entire point of the extension. Pooling easy and hard tasks is deliberate: the pooled `low`-tier pass rate will now be dragged down by the hard tasks iff they actually regress at `low`, which is what H7 measures. (Per-task curves are retained alongside the pooled curve for diagnosis, but the calibration decision remains class-pooled per 04 §5.4.)
+
+### A.4 H7 (pre-registered, falsifiable — reported confirmed/refused regardless of outcome)
+
+> **H7 — with the hard tasks included, at least one scored class shows a genuine effort→quality gradient.** In the extension matrix, at least one of the R-research and C-coding classes has **pooled `low`-tier pass ≤ (its quality-ceiling-tier pass − 10 pp)** — i.e. `low` degrades by more than δ = 10 pp against the class ceiling. This is H4 re-run on a fitting set that now spans the class's difficulty range; H7 differs from H4 only in that the cell includes R4–R6 / C4–C6.
+
+**Expected refit direction: upward.** If H7 holds, the guarded-refit rule (04 §7.2) will move the affected class's recommended tier **above `low`** (to the cheapest tier whose pooled pass is non-inferior to the ceiling at δ = 0.10), because the hard tasks pull `low` below the non-inferiority bar that R1–R3/C1–C3 alone cleared. If H7 is **refused** (both classes still saturate at `low` even with R4–R6/C4–C6), that is a real, reportable negative outcome: it means these tasks, too, failed to separate `claude-opus-4-8` by effort, the recommended tier stays `low`, and "no regression on hard work" remains a claim the instrument cannot yet support — stated honestly, not hidden. The X1.3 precedent (which *did* separate) is the existence proof that the design *can* discriminate; H7 asks whether the harder cousins do.
+
+### A.5 Extension plan (fixed before extension data)
+
+1. **Extension matrix.** 6 tasks (R4–R6, C4–C6) × **5 tiers** (`low, medium, high, xhigh, max`) × **3 reps** = **90 generation runs**, run under the unchanged Phase-0 effort-fidelity gate, run-order/nonce controls, and grading path (R4–R6 are `exact`; C4–C6 are `pytest-asserts` — **no blind grader**, so no H6 dependency). Pool with the existing R/C cells → 18 trials/(class, tier).
+2. **Analyze.** Recompute the pooled per-class curves and the ceiling-referenced non-inferiority test (δ = 0.10) on the pooled 18-trial cells; evaluate **H7**.
+3. **Refit (guarded).** Apply the 04 §7.2 guarded-refit rule to the pooled cells to emit a new `calibration.json` for R-research and C-coding. Record the tier deltas vs the pre-amendment table.
+4. **One confirmation re-run — labelled as such.** Re-run **only the composite `P_calibrated` arm** (X1–X3, 3 reps) with the **refitted** `research-lite`/`coding` tiers substituted, and re-evaluate the original pre-registered composite verdict (H5) against the **unchanged** `P_inherit_xhigh` and `P_uniform_high` baselines from the first run. **This is a post-amendment confirmation, not the original pre-registration:** it tests whether the headline no-regression-at-lower-cost claim survives a calibration table that now sees the class's hard end. The other two arms are not re-run (their tokens/quality do not depend on the refit); reusing them is noted as a fixed-baseline comparison, not a fresh registration.
+
+**Scope guard.** This amendment adds tasks, one hypothesis (H7), and one confirmation re-run. It does **not** alter any v1/v2 constant, metric, CI, δ, ceiling rule, grader contract, or the original H1–H6 verdicts; those remain as first registered and are cited, never silently changed.
+
+*As with the body of this document, no results are stated here: the six tasks and their oracles are pre-registered and validated; the 90-run extension matrix and the confirmation re-run produce numbers only through `bench/effort.py`, after this amendment is committed.*
