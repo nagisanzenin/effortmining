@@ -1,0 +1,62 @@
+{
+  "task_id": "V3-hardtasks",
+  "agent": "data-scientist",
+  "phase": "BUILD",
+  "status": "complete",
+  "artifacts": [
+    "bench/tasks-v2/R4.json",
+    "bench/tasks-v2/R5.json",
+    "bench/tasks-v2/R6.json",
+    "bench/tasks-v2/C4.json",
+    "bench/tasks-v2/C5.json",
+    "bench/tasks-v2/C6.json",
+    "bench/tools/validate_oracles_v2.py",
+    "docs/research/05-benchmark-v2-methodology.md"
+  ],
+  "metrics": {
+    "tasks_authored": 6,
+    "r_tasks": 3,
+    "c_tasks": 3,
+    "validator_checks": 163,
+    "validator_checks_before": 114,
+    "validator_checks_added": 49,
+    "validator_exit": 0,
+    "naive_impls_failed": 12,
+    "naive_impls_failed_breakdown": {"C4": 1, "C5": 8, "C6": 3},
+    "r_keys_rederived": 16,
+    "c_asserts_total": 86,
+    "asserts_per_task": {"C4": 26, "C5": 30, "C6": 30},
+    "r_fields_per_task": {"R4": 6, "R5": 4, "R6": 6},
+    "r_corpus_docs": {"R4": 12, "R5": 15, "R6": 14},
+    "r_corpus_doc_tokens_approx": {"R4": 6500, "R5": 5952, "R6": 6165}
+  },
+  "effort": {
+    "files_read": 8,
+    "files_written": 8,
+    "tool_calls": 44,
+    "reasoning": "high",
+    "method": "reference-first: wrote each C reference + adversarial asserts in scratch and proved discrimination (reference passes / every naive+partial fails) BEFORE authoring the task JSON; invented every R fact and scripted its derivation."
+  },
+  "tasks": {
+    "R4": "R-research / exact (6-field). Failure mode: MULTI-HOP ATTRIBUTION with a decoy shortcut. Trace $48.2M board ARR through deck->arr_final->arr_staging->subscriptions_snapshot(view)->billing.subscriptions_raw(replica)->Zephyr Invoice.amountDueCents (via zephyr-sync). A depth-limited auto-lineage card offers the shortcut 'arr_staging'; '...raw' tempts a stop at the internal replica. Skim stops early; careful follows every hop. 12 docs (~6.5k tok).",
+    "R5": "R-research / exact (4-field). Failure mode: QUANTITATIVE RECONCILIATION with a unit conversion (per-1,000 calls) and an effective-date rule. June rate is $1.80 (effective 2026-05-01): NOT the loud headline $2.00 (superseded) and NOT the newest $1.50 (effective 2026-07-01, future). Billable=raw-healthchecks; total = usage*(1-0.10)+flat fee = 19940.00. 15 docs (~6.0k tok).",
+    "R6": "R-research / exact (6-field). Failure mode: COMMON-CAUSE across 4 incidents, one a genuine coincidence. Loud local causes (slow payments / heavy ranking model / big export / cert expiry); quiet shared cause CHG-7788 (edge.http.workerThreads 256->16 fleet-wide, 2026-06-18T02:00:00Z) reachable only by crossing onset timestamps with the topology map. Exactly 3 of 4 share it; INC-2209 fails BOTH tests (different pool AND pre-dates rollout). Skim answers 'all four'. 14 docs (~6.2k tok).",
+    "C4": "C-coding / pytest-asserts (26). Failure mode: INTERACTING corner rules. resolve_schedule with priority-preemption + min-run drop + same-holder bridging under a FIXED precedence; naive impls satisfy any two but fail the drop-then-bridge and bridge-vs-lurking-priority interactions. Reference passes 26; a drop-but-never-bridge naive fails.",
+    "C5": "C-coding / pytest-asserts (30). Failure mode: THREE INTERLOCKING bugs in a ~140-line module, each individually invisible. window_index +1 off-by-one, window_range inclusive-hi, summarize peak tie to largest index. Round-trip assert needs two fixed at once; ONLY the all-three-fixed module passes (all 7 partial fixes and the shipped buggy module fail).",
+    "C6": "C-coding / pytest-asserts (30). Failure mode: a FORMAL INVARIANT. merge must be a semilattice join (commutative, associative, idempotent) with tombstone retention; dict-union / tie-to-arrival / drop-tombstone shortcuts violate the invariant on adversarial sequences (version ties, tombstone resurrection). Reference passes; 3 shortcuts fail."
+  },
+  "validator_extension": {
+    "kept": "All 114 original checks preserved unchanged (per-task integrity for R1-R3, C1-C3, X1-X3). Only the 3 suite-size invariants had constants refreshed (files 9->15, per-class R3C3X3->R6C6X3, mix exact1/blind2/pytest3->exact4/blind2/pytest6/composite3); each remains a live, green check.",
+    "R_derivation": "Each R key is RE-DERIVED by scripted parsing of the documents (not asserted): R4 follows every lineage hop via regex on the authoritative docs; R5 parses the effective-dated rate rows + applies the first-of-month rule + unit conversion + billable subtraction + discount/fee; R6 finds the fleet-wide reduce (not the rollback), parses the topology pool membership and each postmortem's onset, and computes which incidents pass BOTH the timing and topology tests. All re-derivations == shipped keys; field order checked; structural traps proven present (superseded/future rates, the depth-limited shortcut, the pre-dating cross-pool coincidence, the edge-search-only decoy deploy).",
+    "C_adversarialness": "Each C assert suite (read from the shipped task) is run against an INDEPENDENT embedded reference (must PASS) and a plausible-naive impl (must FAIL). C5 additionally builds all 8 correct/buggy combinations from independent parts and proves ONLY all-three-fixed passes (every one of the 7 partials fails), and extracts the SHIPPED buggy module from the prompt and proves it fails its own asserts."
+  },
+  "methodology_amendment": {
+    "location": "docs/research/05-benchmark-v2-methodology.md, Amendment A (2026-07-07), labelled PRE-DATA for the six new cells.",
+    "rationale": "Quotes the pre-registered fit-blindness warnings (H4 'if H4 fails ... still too easy ... untested'; the difficulty-calibration-is-a-hypothesis threat; the v1 'almost no quality to lose' line) against RESULTS-v2 (both R and C saturate 100% at every tier; recommended 'low', confidence low, delta +0.000). Argues the class recommended-tier is only as informative as the hardest in-class task, so the cell must span the class's difficulty RANGE.",
+    "pooling": "Scored class cells become 6 tasks x 3 reps = 18 trials/(class,tier); the point is composition (easy + hard exemplars pooled), not just larger n.",
+    "H7": "H7 - with the hard tasks included, at least one scored class shows a genuine effort->quality gradient: pooled low-tier pass <= (quality-ceiling-tier pass - 10 pp) in >=1 of R/C; expected refit direction is UPWARD (recommended tier moves above low).",
+    "plan": "Extension matrix (6 tasks x 5 tiers x 3 reps = 90 runs) -> analyze pooled cells + evaluate H7 -> guarded refit of calibration.json -> re-run ONLY the composite P_calibrated arm with refitted research-lite/coding tiers to re-test H5 against the unchanged baselines, explicitly labelled a POST-AMENDMENT CONFIRMATION, not the original pre-registration."
+  },
+  "verification": "python3 bench/tools/validate_oracles_v2.py -> 'ALL V2 ORACLES VALID', 163/163 PASS, exit 0 (114 original + 49 new). Discrimination for every new task is re-proven on each validator run: R4/R5/R6 keys re-derived==shipped with traps present; C4 ref passes / naive fails; C5 all-fixed passes / all 7 partials + shipped buggy fail; C6 ref passes / 3 shortcuts fail. All six task JSONs parse and match the schema contract.",
+  "notes": "Did NOT run any real `claude` generation (the 90-run extension matrix + composite confirmation re-run are QA/run-phase spend; they produce numbers only through bench/effort.py after this commit). Corpora land at ~6.0-6.5k document-tokens each (12-15 docs); load-bearing facts are buried among distractor docs so skimming to the wrong source is a live failure mode, per the X1.3 recipe. Worked strictly within the assigned paths (bench/tasks-v2/{R4-R6,C4-C6}.json, bench/tools/validate_oracles_v2.py, docs/research/05 amendment). No v2 constant, metric, CI, delta, grader contract, or original H1-H6 verdict was altered; the amendment only adds tasks, H7, and one labelled confirmation re-run."
+}
