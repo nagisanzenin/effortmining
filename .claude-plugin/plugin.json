@@ -1,6 +1,6 @@
 {
   "name": "effortmining",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Calibrated per-subagent reasoning effort: classify each subtask, dispatch it to the cheapest tier that still passes.",
   "author": {
     "name": "nagisanzenin"
@@ -15,12 +15,5 @@
     "cost-optimization",
     "benchmark",
     "claude-code"
-  ],
-  "skills": "./skills/",
-  "agents": "./agents/",
-  "hooks": "./hooks/hooks.json",
-  "interface": {
-    "displayName": "effortmining",
-    "category": "orchestration"
-  }
+  ]
 }

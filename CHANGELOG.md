@@ -4,6 +4,12 @@ All notable changes to effortmining are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-07-07
+
+### Fixed
+
+- **Install-blocking manifest bug**: `plugin.json` declared `skills`/`agents`/`hooks` path fields that fail Claude Code's plugin validation (`agents: Invalid input`); components live in the standard directories and are auto-discovered, so the fields are removed. Caught by a real `claude plugin install` from the public marketplace — the plugin now installs cleanly.
+
 ## [0.5.0] — 2026-07-07
 
 The refit: the calibration loop proven end-to-end on deliberately harder fitting tasks.
