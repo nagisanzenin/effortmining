@@ -106,9 +106,14 @@ effortmining/
 └── docs/                      # architecture · BENCHMARK-STORY · research/ (mechanism, literature, methodology)
 ```
 
-## Lineage
+## More from the same workshop
 
-Third repo in a series: [engram](https://github.com/nagisanzenin/engram) (deterministic scheduler, blind assessor, guarded refit) and [claude-code-production-grade-plugin](https://github.com/nagisanzenin/claude-code-production-grade-plugin) (oracle loops, receipt telemetry). Shared discipline: *let a deterministic core decide, and never let the producer of work grade it.* Provenance: `docs/research/03-pattern-mining.md`.
+effortmining is the third repo in a family with one shared discipline: *let a deterministic core decide, and never let the producer of work grade it.*
+
+- **[engram](https://github.com/nagisanzenin/engram)** — an evidence-based learning engine: first-principles curricula, generation-first tutoring, blind-graded free recall, FSRS scheduling. This repo's blind grader and guarded refit are engram patterns, transposed.
+- **[claude-code-production-grade-plugin](https://github.com/nagisanzenin/claude-code-production-grade-plugin)** — turns "build me X" into a gated multi-agent pipeline with receipts for every phase. effortmining was built *with* it — the receipts are in this repo.
+
+Pattern provenance: `docs/research/03-pattern-mining.md`.
 
 ## License
 
