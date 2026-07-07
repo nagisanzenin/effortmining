@@ -4,6 +4,23 @@ All notable changes to effortmining are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-07-07
+
+The refit: the calibration loop proven end-to-end on deliberately harder fitting tasks.
+
+### Added
+
+- **Six hard fitting tasks** (R4-R6 research chains, C4-C6 adversarial coding; 90 more real runs; validator now 163 checks incl. 12 naive-implementation failure proofs) under pre-registered Amendment A.
+- **First data-driven tier move: C-coding `low` → `medium`** (C6 invariant task breaks `low` 16/18; `medium` at ceiling; guarded single-step refit; ambient policy self-updated; stale warning shed automatically).
+- **Contextual-difficulty finding**: X1.3-recipe research saturates at `low` in isolation but defeats `low` inside composite jobs — isolated fitting cannot price context; R-research keeps its warning + route-hard-to-`xhigh` mechanism by design.
+- **Fabrication failure mode on record**: the one remaining composite failure invented a ticket ID absent from its documents — low effort fabricates, not just skims.
+
+### Changed
+
+- Post-refit composite re-test (pre-registered confirmation): verdict remains `calibrated_wins=false` (44/45 vs 45/45) — reported honestly; caveat-aware routing holds 45/45 at equal-or-lower cost than inheritance across draws.
+- Refit warning semantics: warnings for refitted classes are recomputed (earned, not inherited); non-refit classes keep theirs.
+- README v2 section rewritten to the post-refit truth (draw-noise range replaces the single −15.6% exploratory figure).
+
 ## [0.4.0] — 2026-07-07
 
 Benchmark v2: the no-regression proof on real work (research, coding, composite jobs).

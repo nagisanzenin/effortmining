@@ -1,6 +1,6 @@
 ---
 name: miner-medium
-description: "Delegate worker pinned to MEDIUM reasoning effort. Pilot v1 (2026-07-06) calibrates no class to this tier — T2-simple-transform, its a-priori home, tested non-inferior at low. Pick medium as a deliberate one-step-up hedge when a low-tier task feels borderline and you want a little more reasoning without paying for high. Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to MEDIUM reasoning effort. Calibrated for C-coding since the 2026-07-07 refit (the C6 invariant task breaks low; medium sits at the quality ceiling at ~1/7th of max's tokens). "
 effort: medium
 ---
 

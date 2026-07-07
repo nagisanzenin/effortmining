@@ -79,16 +79,16 @@
       "overthinking": true
     },
     "C-coding": {
-      "recommended_tier": "low",
+      "recommended_tier": "medium",
       "confidence": "low",
-      "n": 9,
-      "n_graded": 9,
+      "n": 18,
+      "n_graded": 18,
       "fitted": false,
       "pass_rate": 1.0,
-      "ceiling_tier": "low",
+      "ceiling_tier": "medium",
       "pass_rate_ref": 1.0,
       "delta_vs_ref": 0.0,
-      "median_out_tokens": 430,
+      "median_out_tokens": 916.5,
       "equivalence_low": null,
       "overthinking": true,
       "suite": "v2"
@@ -96,14 +96,14 @@
     "R-research": {
       "recommended_tier": "low",
       "confidence": "low",
-      "n": 9,
-      "n_graded": 9,
+      "n": 18,
+      "n_graded": 18,
       "fitted": false,
       "pass_rate": 1.0,
       "ceiling_tier": "low",
       "pass_rate_ref": 1.0,
       "delta_vs_ref": 0.0,
-      "median_out_tokens": 689,
+      "median_out_tokens": 253.5,
       "equivalence_low": null,
       "overthinking": true,
       "suite": "v2"
@@ -143,7 +143,6 @@
     "note": "policy block reflects the analyze-time recommendation; guarded single-step tier moves may lag the NI-optimal tier"
   },
   "warnings": [
-    "class C-coding fit rests on tasks flagged misclassed",
     "class R-research fit rests on tasks flagged misclassed",
     "class T4-hard-reasoning fit rests on tasks flagged misclassed"
   ],

@@ -1,6 +1,6 @@
 ---
 name: miner-low
-description: "Delegate worker pinned to LOW reasoning effort, the cheapest tier. Pick for mechanical retrieval, extraction, and reformatting with an explicit output template and no reasoning required. Fitted table (v1+v2, 2026-07-07) calibrates this tier for T1-mechanical, T2-simple-transform, and — with fit-blindness warnings — T4-hard-reasoning, R-research, and C-coding (their fitting tasks saturated; route genuinely hard instances to miner-xhigh instead). Identical to the other miner agents except its effort frontmatter."
+description: "Delegate worker pinned to LOW reasoning effort, the cheapest tier. Pick for mechanical retrieval, extraction, and reformatting with an explicit output template and no reasoning required. Fitted table (v1+v2, 2026-07-07) calibrates this tier for T1-mechanical, T2-simple-transform, and — with fit-blindness warnings — T4-hard-reasoning and R-research (their fitting tasks saturated; route genuinely hard instances to miner-xhigh instead). C-coding moved to miner-medium in the 2026-07-07 refit. Identical to the other miner agents except its effort frontmatter."
 effort: low
 ---
 

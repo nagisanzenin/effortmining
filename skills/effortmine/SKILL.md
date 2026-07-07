@@ -1,6 +1,6 @@
 ---
 name: effortmine
-description: "Decompose a request into subtasks, classify each by difficulty (T1 mechanical through T4 hard reasoning), and dispatch each to the cheapest calibrated reasoning-effort tier a blind grader still accepts. Use when you want a multi-part job done at the right effort per part instead of burning one uniform (usually too-high) effort on everything. The per-subtask effort is applied by dispatching to a tier-pinned worker agent (miner-low through miner-max), because Claude Code has no per-spawn effort parameter."
+description: "Decompose a request into subtasks, classify each by difficulty (T1 mechanical through T4 hard reasoning, plus R-research and C-coding), and dispatch each to the cheapest calibrated reasoning-effort tier a blind grader still accepts. Use when you want a multi-part job done at the right effort per part instead of burning one uniform (usually too-high) effort on everything. The per-subtask effort is applied by dispatching to a tier-pinned worker agent (miner-low through miner-max), because Claude Code has no per-spawn effort parameter."
 argument-hint: <the request to dispatch at calibrated effort>
 ---
 
@@ -12,7 +12,7 @@ Read this whole file before acting.
 
 ## What this does, and does NOT, do
 
-**Does:** class-level effort calibration. It maps each subtask to one of four difficulty *classes* and dispatches at the tier the calibration table recommends for that class. The shipped table is fitted from the 2026-07-06 pilot (180 real runs on `claude-opus-4-8`, provenance stamped in `calibration.json`), so that choice is measured and benchmark-backed; if the live table is missing, the skill falls back to an embedded snapshot of those same v1 values.
+**Does:** class-level effort calibration. It maps each subtask to one of six difficulty *classes* and dispatches at the tier the calibration table recommends for that class. The shipped table is fitted from 450+ real runs on `claude-opus-4-8` (2026-07-06 pilot + 2026-07-07 v2/refit; provenance stamped in `calibration.json`), so that choice is measured and benchmark-backed; if the live table is missing, the skill falls back to an embedded snapshot of those same v1 values.
 
 **Does NOT: per-prompt magic.** There is no model that reads a specific prompt and divines its exact optimal effort. The unit of calibration is the *class*, not the individual prompt. Two different T3 subtasks get the same tier. If you need a specific subtask run at a specific effort, say so and it is honored over the table.
 
@@ -41,9 +41,9 @@ Assign every subtask exactly one class. Judge by the *nature of the reasoning th
 | **T3-moderate-reasoning** | diagnosis, multi-constraint logic, or tracing; the work is figuring out *what*, the answer is short | mid | find and fix a subtle bug in a function; solve a small logic puzzle with a unique solution; trace a stack-machine program to its output |
 | **T4-hard-reasoning** | multi-step reasoning with adversarial or overfit-punishing edge cases | high | implement a ledger with holds/releases where a naive version passes the visible cases; count length-6 strings with no 3-in-a-row; topologically resolve dependencies including the cycle case |
 | **R-research** | cross-source synthesis over provided documents: extract, reconcile conflicts, attribute claims | cheap* | which two changelogs conflict on the timeout default and what does the primary source say; identify the common root cause across three postmortems |
-| **C-coding** | implement/fix/refactor real code against a spec with hidden edge cases | cheap* | implement an IntervalSet vs spec; find 3 planted bugs in a 120-line module; refactor away module-global state preserving behavior |
+| **C-coding** | implement/fix/refactor real code against a spec with hidden edge cases | mid | implement an IntervalSet vs spec; fix interlocking bugs in a 150-line module; implement a spec with a formal invariant (refit 2026-07-07: low breaks on invariant edge cases; medium is the ceiling) |
 
-*R-research and C-coding carry a fit-blindness warning (their fitting tasks saturated at `low`): route *genuinely hard* instances — multi-document root-cause work like the benchmark's `X1.3`, adversarial implementations — to **xhigh** rather than the table tier. In the v2 composite A/B this caveat-aware routing scored 100% at 15.6% fewer tokens than inheritance.
+*R-research carries a fit-blindness warning (isolated fitting tasks saturate at `low` even at hard-recipe difficulty, but **contextual** hard research — the benchmark's `X1.3`, a multi-document root-cause question inside a composite job — defeats `low` and needs `xhigh`): route genuinely hard research to **xhigh** rather than the table tier. Across composite draws this caveat-aware routing held 100% quality at equal-or-lower cost than effort inheritance; the reliable double-digit savings come from isolated dispatch (v1: −64.7%).
 
 Rules of thumb when torn: if a correct answer needs *no* deliberation, it is T1. If it needs a single obvious step, T2. If the difficulty is in the *diagnosis* and the output is short, T3. If a plausible-looking wrong answer would pass a shallow check, it is T4. When still unsure between two adjacent classes, pick the harder one; over-spending one tier is a smaller sin than shipping a wrong cheap answer.
 
@@ -54,9 +54,9 @@ Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/res
 - top-level `version` (>= 1 means fitted from real benchmark data; `0` would mean an un-fitted a-priori default), `fitted_date`, `model`, `margin_delta`.
 - `classes.<class>.recommended_tier` in `low | medium | high | xhigh | max`, plus `confidence`, `n_graded`, and the measured pass-rate / token fields.
 
-**If `$CALIB` is absent or unreadable, fall back to the embedded snapshot below** — the fitted pilot v1 values — and tell the user you are dispatching from the shipped v1 snapshot because the live calibration file could not be read (measured, but possibly older than the installed file).
+**If `$CALIB` is absent or unreadable, fall back to the embedded snapshot below** — the fitted values — and tell the user you are dispatching from the shipped v1 snapshot because the live calibration file could not be read (measured, but possibly older than the installed file).
 
-### Embedded fallback table — fitted pilot v1 snapshot (2026-07-06)
+### Embedded fallback table — fitted snapshot (v1 + v2 + refit, 2026-07-07)
 
 ```json
 {
@@ -64,11 +64,10 @@ Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/res
   "source": "fitted-snapshot",
   "fitted_date": "2026-07-07",
   "model": "claude-opus-4-8",
-  "suite_version": "pilot-12 + v2-9",
+  "suite_version": "pilot-12 + v2-15",
   "margin_delta": 0.10,
   "note": "Snapshot of the fitted table (bench/state/calibration.json, v1+v2 merged). Shown here only as the no-file fallback; the installed file is authoritative and may be newer. Per-class confidence is 'low' at n=3/cell.",
   "warnings": [
-    "class C-coding fit rests on tasks flagged misclassed",
     "class R-research fit rests on tasks flagged misclassed",
     "class T4-hard-reasoning fit rests on tasks flagged misclassed"
   ],
@@ -77,8 +76,8 @@ Read `$CALIB`. It maps each class to a `recommended_tier`. Schema (see `docs/res
     "T2-simple-transform":   {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "rationale": "9/9 pass at low (a-priori guess was medium; low tested non-inferior)"},
     "T3-moderate-reasoning": {"recommended_tier": "high", "confidence": "low", "n_graded": 9, "rationale": "real quality gradient: low 6/9, high 9/9 at ~157 median out-tokens"},
     "T4-hard-reasoning":     {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "caveat": "9/9 at low, BUT flagged: fitting tasks too easy — prefer xhigh for genuinely hard work until the suite is extended"},
-    "R-research":            {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "caveat": "flagged: isolated fitting tasks saturated at low, but the composite X1.3 (multi-doc root cause) needed xhigh (low 0/3, xhigh 3/3) — route genuinely hard research to xhigh"},
-    "C-coding":              {"recommended_tier": "low",  "confidence": "low", "n_graded": 9, "caveat": "flagged: fitting tasks saturated at low (incl. hidden adversarial asserts); prefer xhigh for genuinely hard implementations until the suite is extended"}
+    "R-research":            {"recommended_tier": "low",  "confidence": "low", "n_graded": 18, "caveat": "flagged: isolated fitting tasks saturate at low even at X1.3-recipe difficulty, but the composite X1.3 (multi-doc root cause) needed xhigh (low 0/3, xhigh 3/3) — route genuinely hard research to xhigh"},
+    "C-coding":              {"recommended_tier": "medium", "confidence": "low", "n_graded": 18, "rationale": "refit 2026-07-07: C6 invariant task breaks low (16/18); medium at the 18/18 ceiling; warning shed — fit includes proven-hard tasks"}
   }
 }
 ```

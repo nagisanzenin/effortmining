@@ -2863,10 +2863,13 @@ def _calibrate_v2(args, paths) -> int:
     out.setdefault("margin_delta", DELTA)
     out["classes"] = existing_classes
     prov = build_provenance(analysis.get("manifest", {}), "refit-v2")
-    # Union v2-class warnings with whatever the v1 fit already carries — the v2
-    # merge must never silently drop (or silently lack) fit-blindness caveats.
+    # Warnings for classes REFIT here are recomputed fresh (a class whose fit now
+    # includes proven-hard tasks must be able to shed a stale caveat); warnings for
+    # classes not in this refit (the v1 T-classes) are preserved untouched.
     v2_warnings = build_calibration_warnings(per_class, prov["mode"])
-    out["warnings"] = sorted(set((out.get("warnings") or [])) | set(v2_warnings))
+    kept = [w for w in (out.get("warnings") or [])
+            if not any(f"class {cls} " in w for cls in per_class)]
+    out["warnings"] = sorted(set(kept) | set(v2_warnings))
     out["refit_v2"] = {"suite": "v2", "min_n_gate": MIN_N_REFIT, "single_step": True,
                        "classes_merged": merged, "classes_moved": moved,
                        "dispatch_consumed": disp_consumed, "dispatch_skipped": disp_skipped,
