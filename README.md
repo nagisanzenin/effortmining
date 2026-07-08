@@ -162,10 +162,12 @@ effortmining/
 
 ## More from the same workshop
 
-effortmining is the third repo in a family with one shared discipline: *let a deterministic core decide, and never let the producer of work grade it.*
+Five Claude Code plugins from the same workshop. Most share one habit: *let a deterministic core decide, and never let the producer of work grade it.*
 
-- **[engram](https://github.com/nagisanzenin/engram)** — an evidence-based learning engine: first-principles curricula, generation-first tutoring, blind-graded free recall, FSRS scheduling. This repo's blind grader and guarded refit are engram patterns, transposed.
-- **[claude-code-production-grade-plugin](https://github.com/nagisanzenin/claude-code-production-grade-plugin)** — turns "build me X" into a gated multi-agent pipeline with receipts for every phase. effortmining was built *with* it — the receipts are in this repo.
+- **[engram](https://github.com/nagisanzenin/engram)** — evidence-based learning engine: first-principles curricula, generation-first tutoring, blind-graded free recall, FSRS-scheduled memory. This repo's blind grader and guarded refit are engram patterns, transposed.
+- **[idiolect](https://github.com/nagisanzenin/idiolect)** — human-voice writing engine: 60+ measured voices plus a deterministic AI-tell scanner and a blind auditor, so text reads like a person, not a model.
+- **[production-grade](https://github.com/nagisanzenin/claude-code-production-grade-plugin)** — turns "build me X" into a gated multi-agent pipeline (architecture → tests → security → CI/CD) with a receipt for every phase. effortmining was built *with* it — the receipts are in this repo.
+- **[less](https://github.com/nagisanzenin/less)** — a minimal comms protocol for Claude: a per-turn hook makes replies answer-first, pick-list-driven, and calm, without touching the work.
 
 Pattern provenance: `docs/research/03-pattern-mining.md`.
 
