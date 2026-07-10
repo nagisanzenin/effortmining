@@ -8,16 +8,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Dispatch-hook telemetry on plugin installs** ([#1](https://github.com/nagisanzenin/effortmining/issues/1), reported by [@yuzushi-dev](https://github.com/yuzushi-dev)): a plugin-loaded agent is addressed as `<plugin>:<agent>` (`effortmining:miner-low`), and the hook's slug validator rejected the `:`, so `agent_type` was written as `null` for **every** real dispatch — the 0.5.2 fallback scan (`startswith("miner-")`) missed the namespaced name too. The hook now logs the namespaced name verbatim, and `normalize_dispatch_record()` strips the `<plugin>:` prefix when deriving the tier. **Calibration output is unchanged** — tier-only hook records were already class-unresolved and skipped by `calibrate`, so `calibration.json` never saw this field. What returns is the audit trail.
+- **Dispatch-hook telemetry on plugin installs** ([#1](https://github.com/nagisanzenin/effortmining/issues/1), reported by [@yuzushi-dev](https://github.com/yuzushi-dev)): a plugin-loaded agent is addressed as `<plugin>:<agent>` (`effortmining:miner-low`), and the hook's slug validator rejected the `:`, so `agent_type` was written as `null` for **every** real dispatch. The hook now logs the namespaced name verbatim, and `normalize_dispatch_record()` strips the `<plugin>:` prefix when deriving the tier. **Calibration output is unchanged** — tier-only hook records were already class-unresolved and skipped by `calibrate`, so `calibration.json` never saw this field. What returns is the audit trail.
+- **A fabricated audit trail, removed.** 0.5.2 read the `null` as "`subagent_type` is absent from the payload" and added a fallback that scanned every `tool_input` **value** for a `miner-` prefix. The field was never absent — 0.5.1 read it directly and `slug()` discarded it. The scan could not have helped, and it could hurt: a description reading `foo:miner-low` would have been logged as the dispatched worker. It is gone. Alternate *key* spellings remain; they cannot misattribute.
+- **A dispatch record no longer vanishes on a malformed `effort.level`.** An unhashable level (`{"level": []}`) raised `TypeError` at `effort in VALID_EFFORT`, and the shell's `|| exit 0` swallowed it — losing the whole record, valid `agent_type` included. Non-string levels now degrade to `session_effort: null`, or fall back to `$CLAUDE_EFFORT`.
+- **A corrupt dispatch-log line no longer aborts `calibrate`.** `read_jsonl` quarantines only unparseable lines, so a valid-JSON non-object (a bare `42`, a hand-edited record) reached `normalize_dispatch_record()` and crashed the refit with an `AttributeError`. Every field is now type-checked; unresolvable records are skipped and counted, as intended. This also covers the `agent_type: null` records that 0.5.1 and 0.5.2 wrote — a user's existing log stays readable.
 
 ### Added
 
-- **`tests/test_hooks.py` — 27 tests, the first coverage `hooks/*.sh` has ever had.** The hook is deterministic core, but no oracle executed it: `unittest` imported `bench/effort.py` and `selftest` ran the mock pipeline, so a payload assumption could rot silently. It did, for three releases. The suite replays real payload shapes through the actual shell script and asserts the writer/reader seam — what the hook writes, `normalize_dispatch_record()` must resolve a tier from. 11 of the 27 fail against 0.5.2's code.
-- **`RELEASE_PROTOCOL.md`** — the shipping checklist, with the two gates this repo turned out to need: a guard that a mock refit never overwrites the tracked `calibration.json`, and a dogfood against a real plugin-loaded session. The dogfood earned its place immediately by falsifying a claim in the protocol's own first draft.
+- **`tests/test_hooks.py` — 39 tests, the first coverage `hooks/*.sh` has ever had.** The hook is deterministic core, but no oracle executed it: `unittest` imported `bench/effort.py` and `selftest` ran the mock pipeline, so an assumption about the payload was never checked against a payload. It wasn't, for three releases. The suite replays real payload shapes through the actual shell script, pins the fail-open guards (no `python3`, unwritable state dir, malformed stdin, silent stdout), and asserts the writer/reader seam — what the hook writes, `normalize_dispatch_record()` must resolve a tier from. **21 of the 39 fail against 0.5.2's code.** Full suite: 119 → 158.
+- **`RELEASE_PROTOCOL.md`** — the shipping checklist, with the gates this repo turned out to need: a guard that a mock refit never overwrites the tracked `calibration.json`, a `git status` gate so a test run cannot silently mutate the deliverable, and a dogfood against a real plugin-loaded session.
 
 ### Changed
 
-- `bench/effort.py`: `normalize_dispatch_record()` strips a `<plugin>:` prefix before deriving the tier, so namespaced and bare agent names resolve identically. Two selftest checks cover both spellings (58 v1 checks).
+- `bench/effort.py`: `normalize_dispatch_record()` strips a `<plugin>:` prefix before deriving the tier, so namespaced and bare agent names resolve identically. Two selftest checks cover both spellings.
+
+### Notes
+
+- Every plugin-loaded agent is namespaced — under `--plugin-dir` and `claude plugin install` alike. The bare `miner-low` spelling has never been observed on the wire; the hook still handles it, defensively. This was established by dogfooding, and it falsified the first draft of `RELEASE_PROTOCOL.md`, which had asserted the two install paths differed.
 
 ## [0.5.2] — 2026-07-07
 

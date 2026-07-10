@@ -3,13 +3,19 @@
 The repeatable checklist for shipping an effortmining version. Follow every step, in
 order. Do not skip the dogfood.
 
-It exists because of a specific, embarrassing pattern: **the same field broke in two
-consecutive releases.** `agent_type` logged `null` on a live dispatch, 0.5.2 fixed it
-against a payload shape nobody replayed, and the fix was still wrong on the documented
-install path. An outside user found it ([#1](https://github.com/nagisanzenin/effortmining/issues/1)),
-not the 119 unit tests and not the 76 selftest checks — because **neither oracle
-executed `hooks/*.sh` at all.** A release protocol that only runs the tests would have
-shipped it a third time.
+It exists because of a specific, embarrassing pattern: **the same field broke in three
+consecutive releases, and each fix was built on a guess about the payload.** 0.5.1
+logged `agent_type: null` because `slug()` rejected the colon in
+`effortmining:miner-low`. 0.5.2 read that null as *"the field must be absent"* — it
+never was — and added a value-scan that could only ever have logged the wrong thing.
+An outside user found it ([#1](https://github.com/nagisanzenin/effortmining/issues/1)),
+not the 119 unit tests and not the 76 selftest checks, because **neither oracle
+executed `hooks/*.sh` at all.**
+
+The lesson generalizes past this bug: *an assumption about an input survives every test
+you write about it.* A release protocol that only runs the tests would have shipped the
+same defect a third time. Steps 6 and 7 exist to put a real payload in front of the
+real code before it reaches a user.
 
 **Rule of thumb for the number** (semver): user-visible feature or a calibration-table
 tier move → **minor** (`0.6.0`); bug fix, doc, or polish → **patch** (`0.5.3`); a
@@ -91,7 +97,7 @@ The release notes are generated from this section (step 8), so write it for a re
 ## 4 · The gates
 
 ```bash
-python3 -m unittest discover -s tests      # 146 tests, must end OK
+python3 -m unittest discover -s tests      # 158 tests, must end OK
 python3 bench/effort.py selftest           # "ALL INVARIANTS HELD"
 python3 bench/effort.py selftest --suite v2 # "ALL INVARIANTS HELD"
 bash -n hooks/*.sh                          # shell parses
@@ -299,7 +305,7 @@ care about it, tell them to copy it forward before they update.
 - [ ] version bumped in `.claude-plugin/plugin.json` **and** the README badge (re-grep:
       zero stale)
 - [ ] CHANGELOG section written; calibration impact stated outright
-- [ ] `unittest` 146/146 OK · `selftest` v1 + v2 both "ALL INVARIANTS HELD" ·
+- [ ] `unittest` 158/158 OK · `selftest` v1 + v2 both "ALL INVARIANTS HELD" ·
       `bash -n hooks/*.sh` · **`git status` shows only intended files**
 - [ ] calibration guard: `provenance.mode == "real"`, `proven == true`, `version >= 1`;
       any tier move mirrored in every agent/skill/README claim

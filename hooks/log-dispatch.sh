@@ -39,20 +39,19 @@ if tool_name not in ("Task", "Agent"):
     # The matcher should guarantee this, but be defensive: only log dispatches.
     sys.exit(0)
 
-tool_input = payload.get("tool_input") or {}
+tool_input = payload.get("tool_input")
+if not isinstance(tool_input, dict):
+    tool_input = {}
 
-def bare(v):
-    # A plugin-installed agent is addressed as "<plugin>:<agent>" (live:
-    # "effortmining:miner-low"). Built-in agents carry no namespace.
-    return v.rsplit(":", 1)[-1] if isinstance(v, str) else ""
-
-# Field spelling varies across CLI surfaces (observed live: subagent_type absent
-# on an Agent-tool dispatch). Try known spellings, then fall back to scanning
-# string values for a tier-pinned worker name — the only value calibrate needs.
+# subagent_type is always present on a real dispatch. 0.5.2 believed otherwise and
+# scanned tool_input's VALUES for anything starting with "miner-", because 0.5.1
+# logged agent_type=null and "the field must be absent" was the wrong conclusion:
+# the field was there, namespaced, and slug() rejected the colon (issue #1). That
+# scan is gone. It could not have helped, and it could hurt — a free-text value
+# like a description of "foo:miner-low" would have been logged as the dispatched
+# worker. Alternate KEY spellings stay; they are cheap and cannot misattribute.
 agent_type = (tool_input.get("subagent_type") or tool_input.get("subagentType")
-              or tool_input.get("agent_type") or tool_input.get("agentType")
-              or next((v for v in tool_input.values()
-                       if bare(v).startswith("miner-")), None))
+              or tool_input.get("agent_type") or tool_input.get("agentType"))
 session_id = payload.get("session_id")
 
 # Prefer effort.level from the payload; fall back to the env var. Note this is
@@ -63,7 +62,9 @@ effort = None
 lvl = payload.get("effort")
 if isinstance(lvl, dict):
     effort = lvl.get("level")
-if effort is None:
+if not isinstance(effort, str):
+    # Not just `is None`: an unhashable level (e.g. []) would reach `in VALID_EFFORT`
+    # below and raise TypeError, losing the whole record — agent_type included.
     effort = os.environ.get("CLAUDE_EFFORT") or None
 
 def slug(v):
