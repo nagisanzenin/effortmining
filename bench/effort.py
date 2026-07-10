@@ -2754,10 +2754,13 @@ def normalize_dispatch_record(rec: dict, known_classes: set) -> tuple | None:
         from which the CLASS is not derivable -> skipped (counted).
     A class is derived from agent_type only if the agent_type IS a known class name
     (unambiguous); a tier-named worker never resolves a class.
+
+    agent_type may be namespaced ("effortmining:miner-low") when the plugin is
+    installed from the marketplace; strip the "<plugin>:" prefix before matching.
     """
     cls = rec.get("task_class")
     tier = rec.get("tier")
-    agent = rec.get("agent_type") or ""
+    agent = (rec.get("agent_type") or "").rsplit(":", 1)[-1]
     if not tier and agent.startswith("miner-"):
         cand = agent.split("miner-", 1)[1]
         tier = cand if cand in TIERS else None
@@ -3494,6 +3497,17 @@ def cmd_selftest(args) -> int:
               "mock refit stamped provenance.mode=mock, version=0, proven=false (review H1)")
         check(cal["refit"]["dispatch_consumed"] == 1 and cal["refit"]["dispatch_skipped"] == 1,
               "dispatch-log: 1 consumed (effortmine), 1 skipped (hook agent_type only)")
+        # A marketplace install reports subagent_type as "<plugin>:<agent>"; the
+        # tier must stay derivable from either spelling.
+        kc = {t["class"] for t in tasks}
+        check(normalize_dispatch_record(
+                  {"task_class": "T1-mechanical", "agent_type": "effortmining:miner-low"}, kc)
+              == ("T1-mechanical", "low", None),
+              "namespaced agent_type derives tier (plugin install)")
+        check(normalize_dispatch_record(
+                  {"task_class": "T1-mechanical", "agent_type": "miner-low"}, kc)
+              == ("T1-mechanical", "low", None),
+              "bare agent_type derives tier (dev install)")
 
         print("[selftest] 8. no stray temp files left in state/raw")
         strays = (glob.glob(os.path.join(paths.state, ".tmp-*"))

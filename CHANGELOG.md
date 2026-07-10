@@ -4,6 +4,21 @@ All notable changes to effortmining are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-07-10
+
+### Fixed
+
+- **Dispatch-hook telemetry on plugin installs** ([#1](https://github.com/nagisanzenin/effortmining/issues/1), reported by [@yuzushi-dev](https://github.com/yuzushi-dev)): a plugin-loaded agent is addressed as `<plugin>:<agent>` (`effortmining:miner-low`), and the hook's slug validator rejected the `:`, so `agent_type` was written as `null` for **every** real dispatch — the 0.5.2 fallback scan (`startswith("miner-")`) missed the namespaced name too. The hook now logs the namespaced name verbatim, and `normalize_dispatch_record()` strips the `<plugin>:` prefix when deriving the tier. **Calibration output is unchanged** — tier-only hook records were already class-unresolved and skipped by `calibrate`, so `calibration.json` never saw this field. What returns is the audit trail.
+
+### Added
+
+- **`tests/test_hooks.py` — 27 tests, the first coverage `hooks/*.sh` has ever had.** The hook is deterministic core, but no oracle executed it: `unittest` imported `bench/effort.py` and `selftest` ran the mock pipeline, so a payload assumption could rot silently. It did, for three releases. The suite replays real payload shapes through the actual shell script and asserts the writer/reader seam — what the hook writes, `normalize_dispatch_record()` must resolve a tier from. 11 of the 27 fail against 0.5.2's code.
+- **`RELEASE_PROTOCOL.md`** — the shipping checklist, with the two gates this repo turned out to need: a guard that a mock refit never overwrites the tracked `calibration.json`, and a dogfood against a real plugin-loaded session. The dogfood earned its place immediately by falsifying a claim in the protocol's own first draft.
+
+### Changed
+
+- `bench/effort.py`: `normalize_dispatch_record()` strips a `<plugin>:` prefix before deriving the tier, so namespaced and bare agent names resolve identically. Two selftest checks cover both spellings (58 v1 checks).
+
 ## [0.5.2] — 2026-07-07
 
 ### Fixed

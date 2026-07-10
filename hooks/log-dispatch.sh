@@ -40,13 +40,19 @@ if tool_name not in ("Task", "Agent"):
     sys.exit(0)
 
 tool_input = payload.get("tool_input") or {}
+
+def bare(v):
+    # A plugin-installed agent is addressed as "<plugin>:<agent>" (live:
+    # "effortmining:miner-low"). Built-in agents carry no namespace.
+    return v.rsplit(":", 1)[-1] if isinstance(v, str) else ""
+
 # Field spelling varies across CLI surfaces (observed live: subagent_type absent
 # on an Agent-tool dispatch). Try known spellings, then fall back to scanning
 # string values for a tier-pinned worker name — the only value calibrate needs.
 agent_type = (tool_input.get("subagent_type") or tool_input.get("subagentType")
               or tool_input.get("agent_type") or tool_input.get("agentType")
               or next((v for v in tool_input.values()
-                       if isinstance(v, str) and v.startswith("miner-")), None))
+                       if bare(v).startswith("miner-")), None))
 session_id = payload.get("session_id")
 
 # Prefer effort.level from the payload; fall back to the env var. Note this is
@@ -63,12 +69,21 @@ if effort is None:
 def slug(v):
     return v if isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", v) else None
 
+def agent_slug(v):
+    # Same bounded charset as slug(), plus one optional "<plugin>:" namespace.
+    # Log the namespaced name verbatim rather than stripping it: it records which
+    # plugin owned the dispatch, and readers normalize (see
+    # normalize_dispatch_record). A bare slug() here silently nulls every
+    # plugin-installed dispatch, which is the documented install path.
+    return v if isinstance(v, str) and re.fullmatch(
+        r"(?:[A-Za-z0-9._-]{1,64}:)?[A-Za-z0-9._-]{1,64}", v) else None
+
 VALID_EFFORT = {"low", "medium", "high", "xhigh", "max"}
 rec = {
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "source": "posttooluse-hook",
     "tool_name": tool_name,
-    "agent_type": slug(agent_type),
+    "agent_type": agent_slug(agent_type),
     "session_effort": effort if effort in VALID_EFFORT else None,
     "session_id": slug(session_id),
 }
