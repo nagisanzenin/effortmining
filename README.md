@@ -2,7 +2,7 @@
 
 # effortmining
 
-![version](https://img.shields.io/badge/version-0.5.2-blue)
+![version](https://img.shields.io/badge/version-0.5.3-blue)
 ![status](https://img.shields.io/badge/status-benchmark--proven-brightgreen)
 ![effort](https://img.shields.io/badge/effort-low%E2%80%A6max%20(5%20tiers)-green)
 ![telemetry](https://img.shields.io/badge/telemetry-100%25%20local-green)
